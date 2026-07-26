@@ -1,0 +1,6 @@
+# Nunca executar PHP dentro da pasta de uploads — mesmo que alguém
+# consiga subir um arquivo malicioso disfarçado de foto, o servidor
+# nunca vai rodar ele como código.
+<FilesMatch "\.(php|phtml|php3|php4|php5|php7|pht|phar)$">
+  Require all denied
+</FilesMatch>

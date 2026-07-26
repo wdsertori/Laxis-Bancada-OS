@@ -1,0 +1,13 @@
+# Bloqueia listagem de diretório
+Options -Indexes
+
+# CORS: como front e API ficam no mesmo domínio (os.laxis.com.br),
+# nenhuma configuração extra de CORS é necessária. Se um dia o front
+# for servido de outro domínio/subdomínio, adicione aqui:
+# Header set Access-Control-Allow-Origin "https://seu-front.com"
+# Header set Access-Control-Allow-Credentials "true"
+
+# Impede acesso direto a arquivos de configuração, mesmo fora de /config
+<FilesMatch "\.(sql|md|env)$">
+  Require all denied
+</FilesMatch>
