@@ -1,0 +1,14 @@
+# credenciais — NUNCA sobe isso
+api/config/database.php
+
+# build do frontend
+frontend/node_modules/
+frontend/dist/
+
+# uploads reais de clientes (fotos de OS)
+api/uploads/ordens/*
+!api/uploads/ordens/.gitkeep
+
+# logs
+error_log
+*.log
