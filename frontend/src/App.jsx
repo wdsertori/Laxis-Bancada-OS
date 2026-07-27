@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { LayoutDashboard, Users, Wrench, ClipboardList, Plus, Trash2, ArrowLeft, Search, RotateCcw, Camera, Building2, Layers, ChevronDown, ChevronUp, SlidersHorizontal, Printer, UserCog, LogOut, Lock } from 'lucide-react';
+import { LayoutDashboard, Users, Wrench, ClipboardList, Plus, Trash2, ArrowLeft, Search, RotateCcw, Camera, Building2, Layers, ChevronDown, ChevronUp, SlidersHorizontal, Printer, UserCog, LogOut, Lock, Upload } from 'lucide-react';
+import * as XLSX from 'xlsx';
 
 /* ---------- cliente da API (PHP) ---------- */
 const API_BASE = '/api';
@@ -429,6 +430,7 @@ const NAV = [
   { key: 'tipos', label: 'Tipos de equipamento', icon: Layers },
   { key: 'equipamentos', label: 'Equipamentos', icon: Wrench },
   { key: 'ordens', label: 'Ordens de serviço', icon: ClipboardList },
+  { key: 'importar', label: 'Importar OS', icon: Upload, papeis: ['gestao'] },
   { key: 'empresa', label: 'Empresa', icon: Building2, papeis: ['gestao'] },
   { key: 'parametros', label: 'Parâmetros', icon: SlidersHorizontal, papeis: ['gestao'] },
   { key: 'usuarios', label: 'Usuários', icon: UserCog, papeis: ['gestao'] },
@@ -547,6 +549,208 @@ function DadosSection({ db, onExportDataset, onDownloadTemplate, onExportBackup 
       <div className="form-actions" style={{ justifyContent: 'flex-start', gap: 10 }}>
         <button type="button" className="btn ghost" onClick={onExportBackup}>Exportar backup completo (.json)</button>
       </div>
+    </div>
+  );
+}
+
+const CAMPOS_IMPORTACAO = [
+  { key: 'clienteNome', label: 'Nome do cliente', obrigatorio: true },
+  { key: 'clienteDocumento', label: 'CPF / CNPJ do cliente' },
+  { key: 'clienteTelefone', label: 'Telefone do cliente' },
+  { key: 'clienteEmail', label: 'E-mail do cliente' },
+  { key: 'equipamentoTipoNome', label: 'Tipo de equipamento (nome)' },
+  { key: 'equipamentoMarca', label: 'Marca do equipamento' },
+  { key: 'equipamentoModelo', label: 'Modelo do equipamento' },
+  { key: 'equipamentoNumeroSerie', label: 'Número de série' },
+  { key: 'equipamentoPatrimonio', label: 'Patrimônio' },
+  { key: 'numero', label: 'Número da OS (se já existir um)' },
+  { key: 'dataEntrada', label: 'Data de entrada' },
+  { key: 'dataConclusao', label: 'Data de conclusão' },
+  { key: 'dataEntrega', label: 'Data de entrega' },
+  { key: 'status', label: 'Status (recebido / em_orcamento / aguardando_aprovacao / aprovado / em_execucao / concluido / entregue / reprovado)' },
+  { key: 'tipoManutencao', label: 'Tipo de manutenção (preventiva / corretiva / preditiva / preventiva_corretiva)' },
+  { key: 'tipoAtendimento', label: 'Tipo de atendimento (interno / externo)' },
+  { key: 'tecnico', label: 'Técnico responsável' },
+  { key: 'observacoesGerais', label: 'Observações' },
+];
+
+function normalizarTexto(s) {
+  return String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
+}
+
+function ImportarOrdensView({ db, onImportar }) {
+  const [etapa, setEtapa] = useState('upload'); // upload | mapear | resultado
+  const [nomeArquivo, setNomeArquivo] = useState('');
+  const [colunas, setColunas] = useState([]);
+  const [linhasBrutas, setLinhasBrutas] = useState([]);
+  const [mapeamento, setMapeamento] = useState({});
+  const [tipoEquipamentoPadraoId, setTipoEquipamentoPadraoId] = useState('');
+  const [erroArquivo, setErroArquivo] = useState('');
+  const [enviando, setEnviando] = useState(false);
+  const [resultado, setResultado] = useState(null);
+
+  function processarArquivo(file) {
+    setErroArquivo('');
+    setNomeArquivo(file.name);
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const wb = XLSX.read(e.target.result, { type: 'array', cellDates: true });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const linhas = XLSX.utils.sheet_to_json(ws, { defval: '' });
+        if (linhas.length === 0) { setErroArquivo('A planilha está vazia ou não tem dados na primeira aba.'); return; }
+        const cols = Object.keys(linhas[0]);
+
+        // tenta pré-preencher o mapeamento comparando nome da coluna com o campo
+        const auto = {};
+        CAMPOS_IMPORTACAO.forEach((campo) => {
+          const alvo = normalizarTexto(campo.label.split('(')[0]);
+          const achada = cols.find((c) => normalizarTexto(c) === normalizarTexto(campo.key) || normalizarTexto(c) === alvo || normalizarTexto(c).includes(normalizarTexto(campo.key)));
+          if (achada) auto[campo.key] = achada;
+        });
+
+        setColunas(cols);
+        setLinhasBrutas(linhas);
+        setMapeamento(auto);
+        setEtapa('mapear');
+      } catch (err) {
+        setErroArquivo('Não consegui ler esse arquivo. Confirma se é um .xlsx, .xls ou .csv válido.');
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
+  function formatarValor(campoKey, bruto) {
+    if (['dataEntrada', 'dataConclusao', 'dataEntrega'].includes(campoKey) && bruto instanceof Date) {
+      return bruto.toISOString().slice(0, 10);
+    }
+    return String(bruto ?? '').trim();
+  }
+
+  function montarLinhas() {
+    return linhasBrutas.map((row) => {
+      const obj = {};
+      CAMPOS_IMPORTACAO.forEach((campo) => {
+        const col = mapeamento[campo.key];
+        obj[campo.key] = col ? formatarValor(campo.key, row[col]) : '';
+      });
+      return obj;
+    });
+  }
+
+  async function confirmar() {
+    setEnviando(true);
+    try {
+      const linhas = montarLinhas();
+      const r = await onImportar({ linhas, tipoEquipamentoPadraoId: tipoEquipamentoPadraoId || null });
+      setResultado(r);
+      setEtapa('resultado');
+    } catch (err) {
+      window.alert(err.message || 'Falha ao importar.');
+    } finally {
+      setEnviando(false);
+    }
+  }
+
+  function reiniciar() {
+    setEtapa('upload'); setNomeArquivo(''); setColunas([]); setLinhasBrutas([]);
+    setMapeamento({}); setResultado(null); setErroArquivo('');
+  }
+
+  const mapeamentoValido = !!mapeamento.clienteNome;
+
+  return (
+    <div>
+      <div className="view-header"><h2>Importar OS</h2></div>
+      <p className="muted small" style={{ marginBottom: 14 }}>
+        Sobe uma planilha (.xlsx, .xls ou .csv) com OS's — de qualquer origem. Você escolhe qual coluna da
+        planilha corresponde a cada campo do sistema. Cliente e equipamento são localizados pelo nome/série;
+        se não existirem ainda, são criados automaticamente.
+      </p>
+
+      {etapa === 'upload' && (
+        <div className="form-card">
+          <label>Arquivo da planilha
+            <input type="file" accept=".xlsx,.xls,.csv" onChange={(e) => e.target.files[0] && processarArquivo(e.target.files[0])} />
+          </label>
+          {erroArquivo && <p className="login-erro" style={{ marginTop: 10 }}>{erroArquivo}</p>}
+        </div>
+      )}
+
+      {etapa === 'mapear' && (
+        <div className="form-card">
+          <p className="muted small" style={{ marginBottom: 12 }}>
+            <strong>{nomeArquivo}</strong> — {linhasBrutas.length} linha(s) detectada(s). Confirma o mapeamento abaixo
+            (campos em branco ficam vazios/com valor padrão na importação).
+          </p>
+
+          <div className="form-grid">
+            {CAMPOS_IMPORTACAO.map((campo) => (
+              <label key={campo.key}>
+                {campo.label}{campo.obrigatorio && ' *'}
+                <select value={mapeamento[campo.key] || ''} onChange={(e) => setMapeamento({ ...mapeamento, [campo.key]: e.target.value })}>
+                  <option value="">— não usar —</option>
+                  {colunas.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </label>
+            ))}
+            <label>Tipo de equipamento padrão (quando a planilha não indicar ou não encontrar)
+              <select value={tipoEquipamentoPadraoId} onChange={(e) => setTipoEquipamentoPadraoId(e.target.value)}>
+                <option value="">— nenhum —</option>
+                {db.tiposEquipamento.map((t) => <option key={t.id} value={t.id}>{t.nome}</option>)}
+              </select>
+            </label>
+          </div>
+
+          {!mapeamentoValido && <p className="login-erro" style={{ marginTop: 10 }}>Mapeia pelo menos "Nome do cliente" pra continuar.</p>}
+
+          <h4 className="subsection-title" style={{ marginTop: 18 }}>Prévia (3 primeiras linhas)</h4>
+          <div className="table-scroll">
+            <table className="data-table">
+              <thead><tr>{CAMPOS_IMPORTACAO.filter((c) => mapeamento[c.key]).map((c) => <th key={c.key}>{c.label}</th>)}</tr></thead>
+              <tbody>
+                {linhasBrutas.slice(0, 3).map((row, i) => (
+                  <tr key={i}>
+                    {CAMPOS_IMPORTACAO.filter((c) => mapeamento[c.key]).map((c) => (
+                      <td key={c.key}>{formatarValor(c.key, row[mapeamento[c.key]])}</td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="form-actions">
+            <button className="btn ghost" onClick={reiniciar}>Cancelar</button>
+            <button className="btn primary" disabled={!mapeamentoValido || enviando} onClick={confirmar}>
+              {enviando ? 'Importando...' : `Importar ${linhasBrutas.length} linha(s)`}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {etapa === 'resultado' && resultado && (
+        <div className="form-card">
+          <h3 style={{ marginBottom: 10 }}>Importação concluída</h3>
+          <div className="stat-grid" style={{ marginBottom: 14 }}>
+            <div className="stat-card success"><span className="stat-num">{resultado.ordensCriadas}</span><span className="stat-label">OS criadas</span></div>
+            <div className="stat-card"><span className="stat-num">{resultado.clientesCriados}</span><span className="stat-label">Clientes novos</span></div>
+            <div className="stat-card"><span className="stat-num">{resultado.equipamentosCriados}</span><span className="stat-label">Equipamentos novos</span></div>
+            <div className="stat-card amber"><span className="stat-num">{resultado.avisos.length}</span><span className="stat-label">Avisos</span></div>
+          </div>
+          {resultado.avisos.length > 0 && (
+            <>
+              <h4 className="subsection-title">Avisos</h4>
+              <div className="template-list" style={{ maxHeight: 260, overflowY: 'auto' }}>
+                {resultado.avisos.map((a, i) => <div key={i} className="template-item"><span>{a}</span></div>)}
+              </div>
+            </>
+          )}
+          <div className="form-actions">
+            <button className="btn primary" onClick={reiniciar}>Importar outro arquivo</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -893,7 +1097,39 @@ function FotosSection({ ordemId, fotos, onUpload, onRemove }) {
 
 /* ---------- forms ---------- */
 function ClienteForm({ initial, onSave, onCancel }) {
-  const [f, setF] = useState(initial || { nome: '', tipoPessoa: 'PF', documento: '', telefone: '', email: '', endereco: '' });
+  const [f, setF] = useState(initial || {
+    nome: '', tipoPessoa: 'PF', documento: '', telefone: '', email: '',
+    cep: '', rua: '', numero: '', bairro: '', cidade: '', estado: '',
+  });
+  const [buscandoCep, setBuscandoCep] = useState(false);
+  const [cepErro, setCepErro] = useState('');
+
+  async function buscarCep(valorDigitado) {
+    const cepLimpo = valorDigitado.replace(/\D/g, '');
+    if (cepLimpo.length !== 8) return;
+    setBuscandoCep(true);
+    setCepErro('');
+    try {
+      const resp = await fetch(`https://viacep.com.br/ws/${cepLimpo}/json/`);
+      const dados = await resp.json();
+      if (dados.erro) {
+        setCepErro('CEP não encontrado.');
+      } else {
+        setF((prev) => ({
+          ...prev,
+          rua: dados.logradouro || prev.rua,
+          bairro: dados.bairro || prev.bairro,
+          cidade: dados.localidade || prev.cidade,
+          estado: dados.uf || prev.estado,
+        }));
+      }
+    } catch {
+      setCepErro('Não foi possível consultar o CEP agora.');
+    } finally {
+      setBuscandoCep(false);
+    }
+  }
+
   return (
     <div className="form-card">
       <div className="form-grid">
@@ -915,8 +1151,31 @@ function ClienteForm({ initial, onSave, onCancel }) {
         <label>E-mail
           <input value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} />
         </label>
-        <label className="span-2">Endereço
-          <input value={f.endereco} onChange={(e) => setF({ ...f, endereco: e.target.value })} />
+        <label>CEP
+          <input
+            value={f.cep}
+            onChange={(e) => setF({ ...f, cep: e.target.value })}
+            onBlur={(e) => buscarCep(e.target.value)}
+            placeholder="00000-000"
+            maxLength={9}
+          />
+          {buscandoCep && <span className="muted small">Buscando endereço...</span>}
+          {cepErro && <span className="muted small" style={{ color: '#c0392b' }}>{cepErro}</span>}
+        </label>
+        <label className="span-2">Rua
+          <input value={f.rua} onChange={(e) => setF({ ...f, rua: e.target.value })} />
+        </label>
+        <label>Número
+          <input value={f.numero} onChange={(e) => setF({ ...f, numero: e.target.value })} />
+        </label>
+        <label>Bairro
+          <input value={f.bairro} onChange={(e) => setF({ ...f, bairro: e.target.value })} />
+        </label>
+        <label>Cidade
+          <input value={f.cidade} onChange={(e) => setF({ ...f, cidade: e.target.value })} />
+        </label>
+        <label>Estado
+          <input value={f.estado} onChange={(e) => setF({ ...f, estado: e.target.value.toUpperCase() })} maxLength={2} placeholder="SP" />
         </label>
       </div>
       <div className="form-actions">
@@ -2310,6 +2569,12 @@ function AppAutenticado({ usuario, onLogout }) {
 
   useEffect(() => { carregarTudo(); }, []);
 
+  async function importarOrdens(payload) {
+    const resultado = await api.post('/importar_ordens.php', payload);
+    await carregarTudo();
+    return resultado;
+  }
+
   async function addCliente(data) {
     const novo = await api.post('/clientes.php', data);
     setDb((prev) => ({ ...prev, clientes: [...prev.clientes, novo] }));
@@ -2535,6 +2800,7 @@ function AppAutenticado({ usuario, onLogout }) {
             onDelete={() => deleteOs(selectedOs.id)}
           />
         )}
+        {view === 'importar' && usuario.papel === 'gestao' && <ImportarOrdensView db={db} onImportar={importarOrdens} />}
         {view === 'empresa' && <EmpresaForm empresa={db.empresa} onSave={updateEmpresa} />}
         {view === 'parametros' && (
           <ParametrosView
