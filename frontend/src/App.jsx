@@ -2885,8 +2885,19 @@ function AppAutenticado({ usuario, onLogout }) {
   function goToView(key) { setSelectedOsId(null); setView(key); }
   function goNovaOs() { setSelectedOsId(null); setView('ordens'); setForceOpenForm(true); }
 
-  if (loading || !db) {
+  if (loading) {
     return <div className="bancada-app"><style>{CSS}</style><div className="loading-screen">Carregando…</div></div>;
+  }
+  if (!db) {
+    return (
+      <div className="bancada-app"><style>{CSS}</style>
+        <div className="loading-screen" style={{ flexDirection: 'column', gap: 10 }}>
+          <strong>Não foi possível carregar o sistema</strong>
+          <span className="muted small">{erroCarregamento || 'Erro desconhecido.'}</span>
+          <button className="btn primary" onClick={carregarTudo}>Tentar de novo</button>
+        </div>
+      </div>
+    );
   }
 
   const selectedOs = selectedOsId ? db.ordens.find((o) => o.id === selectedOsId) : null;
@@ -3151,7 +3162,7 @@ const CSS = `
 .bancada-app button { font-family: inherit; cursor: pointer; }
 .bancada-app input, .bancada-app select, .bancada-app textarea { font-family: inherit; font-size: 13.5px; }
 
-.loading-screen { padding: 60px; color: var(--ink-muted); font-family: 'IBM Plex Mono', monospace; }
+.loading-screen { padding: 60px; color: var(--ink-muted); font-family: 'IBM Plex Mono', monospace; display: flex; align-items: center; justify-content: center; text-align: center; }
 
 /* sidebar */
 .sidebar { width: 216px; flex-shrink: 0; background: var(--navy); color: #EDEFEC; display: flex; flex-direction: column; padding: 22px 14px; gap: 18px; min-height: 100vh; }
