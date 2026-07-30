@@ -33,9 +33,20 @@ CREATE TABLE clientes (
   nome VARCHAR(190) NOT NULL,
   tipo_pessoa VARCHAR(2) NOT NULL DEFAULT 'PF', -- PF | PJ
   documento VARCHAR(30) DEFAULT '',
-  telefone VARCHAR(30) DEFAULT '',
+  apelido VARCHAR(190) DEFAULT '', -- apelido / nome fantasia
+  contato VARCHAR(190) DEFAULT '', -- nome de quem se fala na empresa/família
+  telefone VARCHAR(30) DEFAULT '', -- celular / whatsapp
   email VARCHAR(190) DEFAULT '',
-  endereco VARCHAR(255) DEFAULT '',
+  cep VARCHAR(9) DEFAULT '',
+  rua VARCHAR(190) DEFAULT '',
+  numero VARCHAR(20) DEFAULT '',
+  bairro VARCHAR(120) DEFAULT '',
+  cidade VARCHAR(120) DEFAULT '',
+  estado VARCHAR(2) DEFAULT '',
+  atuacao VARCHAR(120) DEFAULT '', -- médico, dentista, podólogo, cabeleireiro...
+  como_ficou_sabendo VARCHAR(190) DEFAULT '',
+  observacoes TEXT, -- ex: cliente inadimplente, preferências de atendimento
+  data_cadastro DATE DEFAULT NULL, -- data real de início do relacionamento (para clientes migrados)
   criado_em DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   atualizado_em DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   UNIQUE KEY uq_clientes_codigo (codigo)
@@ -89,6 +100,7 @@ CREATE TABLE equipamentos (
 CREATE TABLE ordens (
   id INT AUTO_INCREMENT PRIMARY KEY,
   numero VARCHAR(20) NOT NULL,
+  token_publico VARCHAR(40) DEFAULT NULL, -- usado no link público (QR code / aprovação por WhatsApp), nunca o número sequencial
   cliente_id INT NOT NULL,
   equipamento_id INT NOT NULL,
   tipo_atendimento VARCHAR(20) NOT NULL DEFAULT 'interno', -- interno | externo
@@ -102,6 +114,7 @@ CREATE TABLE ordens (
   observacoes_gerais TEXT,
   garantia_equipamento VARCHAR(20) DEFAULT 'nao_informado',
   data_conclusao DATE NULL,
+  data_pagamento DATE NULL,
   data_entrega DATE NULL,
   checklist_entrada TEXT,        -- JSON: [{id, descricao, status, obs}]
   checklist_pre_orcamento TEXT,  -- JSON
@@ -112,6 +125,7 @@ CREATE TABLE ordens (
   criado_em DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   atualizado_em DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   UNIQUE KEY uq_ordens_numero (numero),
+  UNIQUE KEY uq_ordens_token (token_publico),
   CONSTRAINT fk_ordens_cliente FOREIGN KEY (cliente_id) REFERENCES clientes(id) ON DELETE RESTRICT,
   CONSTRAINT fk_ordens_equipamento FOREIGN KEY (equipamento_id) REFERENCES equipamentos(id) ON DELETE RESTRICT,
   CONSTRAINT fk_ordens_usuario FOREIGN KEY (criado_por) REFERENCES usuarios(id) ON DELETE SET NULL,
