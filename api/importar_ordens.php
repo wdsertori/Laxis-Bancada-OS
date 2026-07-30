@@ -37,6 +37,28 @@ function valor(array $linha, string $campo): string {
     return trim((string) ($linha[$campo] ?? ''));
 }
 
+function numeroDecimal(string $bruto): float {
+    $limpo = trim($bruto);
+    if ($limpo === '') { return 0.0; }
+    // aceita "1.234,56" (padrão BR) ou "1234.56" (padrão US)
+    if (preg_match('/^-?\d{1,3}(\.\d{3})*,\d+$/', $limpo)) {
+        $limpo = str_replace('.', '', $limpo);
+        $limpo = str_replace(',', '.', $limpo);
+    } elseif (strpos($limpo, ',') !== false && strpos($limpo, '.') === false) {
+        $limpo = str_replace(',', '.', $limpo);
+    }
+    return is_numeric($limpo) ? (float) $limpo : 0.0;
+}
+
+function mapearAprovado(string $bruto): string {
+    $t = strtolower(trim($bruto));
+    $t = preg_replace('/[^a-z]/', '', $t); // tira acento/pontuação (ex: "não" -> "nao")
+    if (in_array($t, ['sim', 'aprovado', 's', 'yes'], true)) { return 'aprovado'; }
+    if (in_array($t, ['nao', 'reprovado', 'n', 'no'], true)) { return 'reprovado'; }
+    if ($t === 'descarte') { return 'descarte'; }
+    return 'pendente';
+}
+
 $avisos = [];
 $criadosClientes = 0;
 $criadosEquipamentos = 0;
@@ -52,7 +74,9 @@ try {
 
     $stmtClientePorNome = $pdo->prepare('SELECT id FROM clientes WHERE LOWER(nome) = LOWER(?) LIMIT 1');
     $stmtInsereCliente = $pdo->prepare(
-        'INSERT INTO clientes (codigo, nome, tipo_pessoa, documento, telefone, email) VALUES (?, ?, ?, ?, ?, ?)'
+        'INSERT INTO clientes (codigo, nome, tipo_pessoa, documento, apelido, contato, telefone, email,
+            cep, rua, numero, bairro, cidade, estado, atuacao, como_ficou_sabendo, observacoes, data_cadastro)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
     );
     $stmtMaxCodigo = $pdo->query('SELECT COALESCE(MAX(CAST(codigo AS UNSIGNED)), 0) FROM clientes');
     $proximoCodigoCliente = (int) $stmtMaxCodigo->fetchColumn();
@@ -67,15 +91,11 @@ try {
     );
 
     $stmtNumeroExiste = $pdo->prepare('SELECT COUNT(*) FROM ordens WHERE numero = ?');
-    $orcamentoPadrao = json_encode(
-        ['descricaoServico' => '', 'valorServico' => '', 'pecas' => [], 'deslocamento' => '', 'desconto' => '', 'formaPagamento' => '', 'aprovado' => 'pendente', 'obsInternas' => ''],
-        JSON_UNESCAPED_UNICODE
-    );
     $stmtInsereOrdem = $pdo->prepare(
-        'INSERT INTO ordens (numero, cliente_id, equipamento_id, tipo_atendimento, data_entrada, origem, tipo_manutencao,
-            tecnico, status, observacoes_gerais, garantia_equipamento, data_conclusao, data_entrega,
+        'INSERT INTO ordens (numero, token_publico, cliente_id, equipamento_id, tipo_atendimento, data_entrada, origem, tipo_manutencao,
+            tecnico, status, observacoes_gerais, garantia_equipamento, data_conclusao, data_pagamento, data_entrega,
             checklist_entrada, checklist_pre_orcamento, checklist_pos_orcamento, checklist_atendimento, orcamento, criado_por)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
     );
 
     foreach ($linhas as $i => $linha) {
@@ -96,8 +116,13 @@ try {
                 $proximoCodigoCliente++;
                 $codigo = str_pad((string) $proximoCodigoCliente, 4, '0', STR_PAD_LEFT);
                 $stmtInsereCliente->execute([
-                    $codigo, $nomeCliente, 'PF',
-                    valor($linha, 'clienteDocumento'), valor($linha, 'clienteTelefone'), valor($linha, 'clienteEmail'),
+                    $codigo, $nomeCliente, 'PF', valor($linha, 'clienteDocumento'),
+                    valor($linha, 'clienteApelido'), valor($linha, 'clienteContato'),
+                    valor($linha, 'clienteTelefone'), valor($linha, 'clienteEmail'),
+                    valor($linha, 'clienteCep'), valor($linha, 'clienteRua'), valor($linha, 'clienteNumero'),
+                    valor($linha, 'clienteBairro'), valor($linha, 'clienteCidade'), valor($linha, 'clienteEstado'),
+                    valor($linha, 'clienteAtuacao'), valor($linha, 'clienteComoFicouSabendo'), valor($linha, 'clienteObservacoes'),
+                    valor($linha, 'clienteDataCadastro') ?: null,
                 ]);
                 $clienteId = (int) $pdo->lastInsertId();
                 $criadosClientes++;
@@ -154,14 +179,52 @@ try {
             $status = valor($linha, 'status') ?: 'recebido';
             $dataEntrada = valor($linha, 'dataEntrada') ?: date('Y-m-d');
             $dataConclusao = valor($linha, 'dataConclusao') ?: null;
+            $dataPagamento = valor($linha, 'dataPagamento') ?: null;
             $dataEntrega = valor($linha, 'dataEntrega') ?: null;
 
+            // --- peças: até 10 pares nome/valor viram um item genérico somado + texto de referência ---
+            $itensPecasTexto = [];
+            $totalPecas = 0.0;
+            for ($p = 1; $p <= 10; $p++) {
+                $nomePeca = valor($linha, "peca{$p}Nome");
+                $valorPecaBruto = valor($linha, "peca{$p}Valor");
+                $valorPeca = numeroDecimal($valorPecaBruto);
+                if ($nomePeca === '' && $valorPeca == 0.0) { continue; }
+                $totalPecas += $valorPeca;
+                $itensPecasTexto[] = ($nomePeca !== '' ? $nomePeca : 'Peça sem nome') . ' — R$ ' . number_format($valorPeca, 2, ',', '.');
+            }
+            $pecasArray = [];
+            if ($totalPecas > 0) {
+                $pecasArray[] = ['id' => uniqid('imp_'), 'descricao' => 'Peças utilizadas (importação)', 'preco' => round($totalPecas, 2)];
+            }
+
+            $acessorios = valor($linha, 'acessorios');
+            $partesObs = [];
+            if ($itensPecasTexto) {
+                $partesObs[] = 'Peças (histórico da importação): ' . implode('; ', $itensPecasTexto) . ' | Total peças: R$ ' . number_format($totalPecas, 2, ',', '.');
+            }
+            if ($acessorios !== '') {
+                $partesObs[] = 'Acessórios: ' . $acessorios;
+            }
+            $obsInternas = implode(' — ', $partesObs);
+
+            $orcamento = json_encode([
+                'descricaoServico' => '',
+                'valorServico' => valor($linha, 'valorServico'),
+                'pecas' => $pecasArray,
+                'deslocamento' => valor($linha, 'deslocamento'),
+                'desconto' => valor($linha, 'desconto'),
+                'formaPagamento' => valor($linha, 'formaPagamento'),
+                'aprovado' => mapearAprovado(valor($linha, 'aprovado')),
+                'obsInternas' => $obsInternas,
+            ], JSON_UNESCAPED_UNICODE);
+
             $stmtInsereOrdem->execute([
-                $numero, $clienteId, $equipamentoId,
+                $numero, bin2hex(random_bytes(16)), $clienteId, $equipamentoId,
                 valor($linha, 'tipoAtendimento') ?: 'interno', $dataEntrada, 'cliente_trouxe',
                 valor($linha, 'tipoManutencao') ?: 'preventiva', valor($linha, 'tecnico'), $status,
-                valor($linha, 'observacoesGerais'), 'nao_informado', $dataConclusao, $dataEntrega,
-                '[]', '[]', '[]', '[]', $orcamentoPadrao, $user['id'],
+                valor($linha, 'observacoesGerais'), 'nao_informado', $dataConclusao, $dataPagamento, $dataEntrega,
+                '[]', '[]', '[]', '[]', $orcamento, $user['id'],
             ]);
             $criadasOrdens++;
         } catch (Throwable $e) {

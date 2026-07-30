@@ -1,10 +1,12 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import './storage-shim.js';
-import App from './App.jsx';
+import App, { PublicOsView } from './App.jsx';
+
+const tokenPublico = new URLSearchParams(window.location.search).get('os');
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    <App />
+    {tokenPublico ? <PublicOsView token={tokenPublico} /> : <App />}
   </React.StrictMode>
 );

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { LayoutDashboard, Users, Wrench, ClipboardList, Plus, Trash2, ArrowLeft, Search, RotateCcw, Camera, Building2, Layers, ChevronDown, ChevronUp, SlidersHorizontal, Printer, UserCog, LogOut, Lock, Upload } from 'lucide-react';
 import * as XLSX from 'xlsx';
+import { QRCodeSVG } from 'qrcode.react';
 
 /* ---------- cliente da API (PHP) ---------- */
 const API_BASE = '/api';
@@ -349,7 +350,7 @@ const DATASET_CONFIG = {
       tecnico: '', origem: 'cliente_trouxe | retirada', observacoesGerais: '',
       checklistEntrada: [], checklistPreOrcamento: [], checklistPosOrcamento: [], checklistAtendimento: [],
       orcamento: { descricaoServico: '', valorServico: '', pecas: [], deslocamento: '', desconto: '', formaPagamento: '', aprovado: 'pendente', obsInternas: '' },
-      garantiaEquipamento: 'nao_informado', dataConclusao: null, dataEntrega: null, fotos: [],
+      garantiaEquipamento: 'nao_informado', dataConclusao: null, dataPagamento: null, dataEntrega: null, fotos: [],
     }]),
     importUpsert: (db, rows) => {
       let ordens = [...db.ordens];
@@ -431,6 +432,7 @@ const NAV = [
   { key: 'equipamentos', label: 'Equipamentos', icon: Wrench },
   { key: 'ordens', label: 'Ordens de serviço', icon: ClipboardList },
   { key: 'importar', label: 'Importar OS', icon: Upload, papeis: ['gestao'] },
+  { key: 'importarClientes', label: 'Importar clientes', icon: Upload, papeis: ['gestao'] },
   { key: 'empresa', label: 'Empresa', icon: Building2, papeis: ['gestao'] },
   { key: 'parametros', label: 'Parâmetros', icon: SlidersHorizontal, papeis: ['gestao'] },
   { key: 'usuarios', label: 'Usuários', icon: UserCog, papeis: ['gestao'] },
@@ -555,9 +557,21 @@ function DadosSection({ db, onExportDataset, onDownloadTemplate, onExportBackup 
 
 const CAMPOS_IMPORTACAO = [
   { key: 'clienteNome', label: 'Nome do cliente', obrigatorio: true },
+  { key: 'clienteApelido', label: 'Apelido / fantasia do cliente' },
   { key: 'clienteDocumento', label: 'CPF / CNPJ do cliente' },
-  { key: 'clienteTelefone', label: 'Telefone do cliente' },
+  { key: 'clienteContato', label: 'Contato do cliente (com quem falar)' },
+  { key: 'clienteTelefone', label: 'Telefone / WhatsApp do cliente' },
   { key: 'clienteEmail', label: 'E-mail do cliente' },
+  { key: 'clienteCep', label: 'CEP do cliente' },
+  { key: 'clienteRua', label: 'Endereço do cliente' },
+  { key: 'clienteNumero', label: 'Número do endereço' },
+  { key: 'clienteBairro', label: 'Bairro do cliente' },
+  { key: 'clienteCidade', label: 'Cidade do cliente' },
+  { key: 'clienteEstado', label: 'Estado do cliente' },
+  { key: 'clienteAtuacao', label: 'Atuação do cliente' },
+  { key: 'clienteComoFicouSabendo', label: 'Como o cliente ficou sabendo' },
+  { key: 'clienteObservacoes', label: 'Observações do cliente' },
+  { key: 'clienteDataCadastro', label: 'Data de cadastro do cliente' },
   { key: 'equipamentoTipoNome', label: 'Tipo de equipamento (nome)' },
   { key: 'equipamentoMarca', label: 'Marca do equipamento' },
   { key: 'equipamentoModelo', label: 'Modelo do equipamento' },
@@ -566,11 +580,22 @@ const CAMPOS_IMPORTACAO = [
   { key: 'numero', label: 'Número da OS (se já existir um)' },
   { key: 'dataEntrada', label: 'Data de entrada' },
   { key: 'dataConclusao', label: 'Data de conclusão' },
+  { key: 'dataPagamento', label: 'Data de pagamento' },
   { key: 'dataEntrega', label: 'Data de entrega' },
   { key: 'status', label: 'Status (recebido / em_orcamento / aguardando_aprovacao / aprovado / em_execucao / concluido / entregue / reprovado)' },
+  { key: 'aprovado', label: 'Aprovado (sim / não / descarte)' },
   { key: 'tipoManutencao', label: 'Tipo de manutenção (preventiva / corretiva / preditiva / preventiva_corretiva)' },
   { key: 'tipoAtendimento', label: 'Tipo de atendimento (interno / externo)' },
   { key: 'tecnico', label: 'Técnico responsável' },
+  { key: 'valorServico', label: 'Valor de mão de obra' },
+  { key: 'deslocamento', label: 'Frete / deslocamento' },
+  { key: 'desconto', label: 'Desconto' },
+  { key: 'formaPagamento', label: 'Forma de pagamento' },
+  { key: 'acessorios', label: 'Acessórios' },
+  ...Array.from({ length: 10 }, (_, i) => i + 1).flatMap((n) => [
+    { key: `peca${n}Nome`, label: `Peça ${n} (nome)` },
+    { key: `peca${n}Valor`, label: `Peça ${n} (valor)` },
+  ]),
   { key: 'observacoesGerais', label: 'Observações' },
 ];
 
@@ -578,7 +603,7 @@ function normalizarTexto(s) {
   return String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
 }
 
-function ImportarOrdensView({ db, onImportar }) {
+function ImportadorPlanilha({ titulo, descricao, campos, campoObrigatorio, campoOrigemArquivo = '.xlsx,.xls,.csv', mostrarTipoEquipamento, db, onImportar, renderResumo, linkModelo }) {
   const [etapa, setEtapa] = useState('upload'); // upload | mapear | resultado
   const [nomeArquivo, setNomeArquivo] = useState('');
   const [colunas, setColunas] = useState([]);
@@ -601,9 +626,8 @@ function ImportarOrdensView({ db, onImportar }) {
         if (linhas.length === 0) { setErroArquivo('A planilha está vazia ou não tem dados na primeira aba.'); return; }
         const cols = Object.keys(linhas[0]);
 
-        // tenta pré-preencher o mapeamento comparando nome da coluna com o campo
         const auto = {};
-        CAMPOS_IMPORTACAO.forEach((campo) => {
+        campos.forEach((campo) => {
           const alvo = normalizarTexto(campo.label.split('(')[0]);
           const achada = cols.find((c) => normalizarTexto(c) === normalizarTexto(campo.key) || normalizarTexto(c) === alvo || normalizarTexto(c).includes(normalizarTexto(campo.key)));
           if (achada) auto[campo.key] = achada;
@@ -621,7 +645,7 @@ function ImportarOrdensView({ db, onImportar }) {
   }
 
   function formatarValor(campoKey, bruto) {
-    if (['dataEntrada', 'dataConclusao', 'dataEntrega'].includes(campoKey) && bruto instanceof Date) {
+    if (/data/i.test(campoKey) && bruto instanceof Date) {
       return bruto.toISOString().slice(0, 10);
     }
     return String(bruto ?? '').trim();
@@ -630,7 +654,7 @@ function ImportarOrdensView({ db, onImportar }) {
   function montarLinhas() {
     return linhasBrutas.map((row) => {
       const obj = {};
-      CAMPOS_IMPORTACAO.forEach((campo) => {
+      campos.forEach((campo) => {
         const col = mapeamento[campo.key];
         obj[campo.key] = col ? formatarValor(campo.key, row[col]) : '';
       });
@@ -642,7 +666,8 @@ function ImportarOrdensView({ db, onImportar }) {
     setEnviando(true);
     try {
       const linhas = montarLinhas();
-      const r = await onImportar({ linhas, tipoEquipamentoPadraoId: tipoEquipamentoPadraoId || null });
+      const extras = mostrarTipoEquipamento ? { tipoEquipamentoPadraoId: tipoEquipamentoPadraoId || null } : {};
+      const r = await onImportar({ linhas, ...extras });
       setResultado(r);
       setEtapa('resultado');
     } catch (err) {
@@ -657,21 +682,22 @@ function ImportarOrdensView({ db, onImportar }) {
     setMapeamento({}); setResultado(null); setErroArquivo('');
   }
 
-  const mapeamentoValido = !!mapeamento.clienteNome;
+  const mapeamentoValido = !!mapeamento[campoObrigatorio];
 
   return (
     <div>
-      <div className="view-header"><h2>Importar OS</h2></div>
-      <p className="muted small" style={{ marginBottom: 14 }}>
-        Sobe uma planilha (.xlsx, .xls ou .csv) com OS's — de qualquer origem. Você escolhe qual coluna da
-        planilha corresponde a cada campo do sistema. Cliente e equipamento são localizados pelo nome/série;
-        se não existirem ainda, são criados automaticamente.
-      </p>
+      <div className="view-header"><h2>{titulo}</h2></div>
+      <p className="muted small" style={{ marginBottom: 14 }}>{descricao}</p>
+      {linkModelo && etapa === 'upload' && (
+        <p className="muted small" style={{ marginBottom: 14 }}>
+          <a href={linkModelo} download>Baixar planilha modelo</a>
+        </p>
+      )}
 
       {etapa === 'upload' && (
         <div className="form-card">
           <label>Arquivo da planilha
-            <input type="file" accept=".xlsx,.xls,.csv" onChange={(e) => e.target.files[0] && processarArquivo(e.target.files[0])} />
+            <input type="file" accept={campoOrigemArquivo} onChange={(e) => e.target.files[0] && processarArquivo(e.target.files[0])} />
           </label>
           {erroArquivo && <p className="login-erro" style={{ marginTop: 10 }}>{erroArquivo}</p>}
         </div>
@@ -685,7 +711,7 @@ function ImportarOrdensView({ db, onImportar }) {
           </p>
 
           <div className="form-grid">
-            {CAMPOS_IMPORTACAO.map((campo) => (
+            {campos.map((campo) => (
               <label key={campo.key}>
                 {campo.label}{campo.obrigatorio && ' *'}
                 <select value={mapeamento[campo.key] || ''} onChange={(e) => setMapeamento({ ...mapeamento, [campo.key]: e.target.value })}>
@@ -694,24 +720,26 @@ function ImportarOrdensView({ db, onImportar }) {
                 </select>
               </label>
             ))}
-            <label>Tipo de equipamento padrão (quando a planilha não indicar ou não encontrar)
-              <select value={tipoEquipamentoPadraoId} onChange={(e) => setTipoEquipamentoPadraoId(e.target.value)}>
-                <option value="">— nenhum —</option>
-                {db.tiposEquipamento.map((t) => <option key={t.id} value={t.id}>{t.nome}</option>)}
-              </select>
-            </label>
+            {mostrarTipoEquipamento && (
+              <label>Tipo de equipamento padrão (quando a planilha não indicar ou não encontrar)
+                <select value={tipoEquipamentoPadraoId} onChange={(e) => setTipoEquipamentoPadraoId(e.target.value)}>
+                  <option value="">— nenhum —</option>
+                  {db.tiposEquipamento.map((t) => <option key={t.id} value={t.id}>{t.nome}</option>)}
+                </select>
+              </label>
+            )}
           </div>
 
-          {!mapeamentoValido && <p className="login-erro" style={{ marginTop: 10 }}>Mapeia pelo menos "Nome do cliente" pra continuar.</p>}
+          {!mapeamentoValido && <p className="login-erro" style={{ marginTop: 10 }}>Mapeia o campo obrigatório (*) pra continuar.</p>}
 
           <h4 className="subsection-title" style={{ marginTop: 18 }}>Prévia (3 primeiras linhas)</h4>
           <div className="table-scroll">
             <table className="data-table">
-              <thead><tr>{CAMPOS_IMPORTACAO.filter((c) => mapeamento[c.key]).map((c) => <th key={c.key}>{c.label}</th>)}</tr></thead>
+              <thead><tr>{campos.filter((c) => mapeamento[c.key]).map((c) => <th key={c.key}>{c.label}</th>)}</tr></thead>
               <tbody>
                 {linhasBrutas.slice(0, 3).map((row, i) => (
                   <tr key={i}>
-                    {CAMPOS_IMPORTACAO.filter((c) => mapeamento[c.key]).map((c) => (
+                    {campos.filter((c) => mapeamento[c.key]).map((c) => (
                       <td key={c.key}>{formatarValor(c.key, row[mapeamento[c.key]])}</td>
                     ))}
                   </tr>
@@ -732,12 +760,7 @@ function ImportarOrdensView({ db, onImportar }) {
       {etapa === 'resultado' && resultado && (
         <div className="form-card">
           <h3 style={{ marginBottom: 10 }}>Importação concluída</h3>
-          <div className="stat-grid" style={{ marginBottom: 14 }}>
-            <div className="stat-card success"><span className="stat-num">{resultado.ordensCriadas}</span><span className="stat-label">OS criadas</span></div>
-            <div className="stat-card"><span className="stat-num">{resultado.clientesCriados}</span><span className="stat-label">Clientes novos</span></div>
-            <div className="stat-card"><span className="stat-num">{resultado.equipamentosCriados}</span><span className="stat-label">Equipamentos novos</span></div>
-            <div className="stat-card amber"><span className="stat-num">{resultado.avisos.length}</span><span className="stat-label">Avisos</span></div>
-          </div>
+          {renderResumo(resultado)}
           {resultado.avisos.length > 0 && (
             <>
               <h4 className="subsection-title">Avisos</h4>
@@ -752,6 +775,69 @@ function ImportarOrdensView({ db, onImportar }) {
         </div>
       )}
     </div>
+  );
+}
+
+function ImportarOrdensView({ db, onImportar }) {
+  return (
+    <ImportadorPlanilha
+      titulo="Importar OS"
+      descricao="Sobe uma planilha (.xlsx, .xls ou .csv) com OS's — de qualquer origem. Você escolhe qual coluna da planilha corresponde a cada campo do sistema. Cliente e equipamento são localizados pelo nome/série; se não existirem ainda, são criados automaticamente."
+      campos={CAMPOS_IMPORTACAO}
+      campoObrigatorio="clienteNome"
+      mostrarTipoEquipamento
+      db={db}
+      onImportar={onImportar}
+      linkModelo="/modelo_importacao_os.xlsx"
+      renderResumo={(resultado) => (
+        <div className="stat-grid" style={{ marginBottom: 14 }}>
+          <div className="stat-card success"><span className="stat-num">{resultado.ordensCriadas}</span><span className="stat-label">OS criadas</span></div>
+          <div className="stat-card"><span className="stat-num">{resultado.clientesCriados}</span><span className="stat-label">Clientes novos</span></div>
+          <div className="stat-card"><span className="stat-num">{resultado.equipamentosCriados}</span><span className="stat-label">Equipamentos novos</span></div>
+          <div className="stat-card amber"><span className="stat-num">{resultado.avisos.length}</span><span className="stat-label">Avisos</span></div>
+        </div>
+      )}
+    />
+  );
+}
+
+const CAMPOS_IMPORTACAO_CLIENTES = [
+  { key: 'nome', label: 'Nome / Razão Social', obrigatorio: true },
+  { key: 'apelido', label: 'Apelido / Fantasia' },
+  { key: 'documento', label: 'CNPJ / CPF' },
+  { key: 'contato', label: 'Contato' },
+  { key: 'telefone', label: 'Cel / Whats' },
+  { key: 'email', label: 'E-mail' },
+  { key: 'cep', label: 'CEP' },
+  { key: 'rua', label: 'Endereço' },
+  { key: 'numero', label: 'Número' },
+  { key: 'bairro', label: 'Bairro' },
+  { key: 'cidade', label: 'Cidade' },
+  { key: 'estado', label: 'Estado' },
+  { key: 'atuacao', label: 'Atuação' },
+  { key: 'comoFicouSabendo', label: 'Como ficou sabendo?' },
+  { key: 'observacoes', label: 'Observação' },
+  { key: 'dataCadastro', label: 'Data Cadastro' },
+];
+
+function ImportarClientesView({ onImportar }) {
+  return (
+    <ImportadorPlanilha
+      titulo="Importar clientes"
+      descricao="Sobe a planilha de clientes (.xlsx, .xls ou .csv). Cliente já existente (mesmo nome) tem os dados atualizados em vez de duplicado."
+      campos={CAMPOS_IMPORTACAO_CLIENTES}
+      campoObrigatorio="nome"
+      db={null}
+      onImportar={onImportar}
+      linkModelo="/modelo_importacao_clientes.xlsx"
+      renderResumo={(resultado) => (
+        <div className="stat-grid" style={{ marginBottom: 14 }}>
+          <div className="stat-card success"><span className="stat-num">{resultado.clientesCriados}</span><span className="stat-label">Clientes novos</span></div>
+          <div className="stat-card"><span className="stat-num">{resultado.clientesAtualizados}</span><span className="stat-label">Clientes atualizados</span></div>
+          <div className="stat-card amber"><span className="stat-num">{resultado.avisos.length}</span><span className="stat-label">Avisos</span></div>
+        </div>
+      )}
+    />
   );
 }
 
@@ -1098,8 +1184,9 @@ function FotosSection({ ordemId, fotos, onUpload, onRemove }) {
 /* ---------- forms ---------- */
 function ClienteForm({ initial, onSave, onCancel }) {
   const [f, setF] = useState(initial || {
-    nome: '', tipoPessoa: 'PF', documento: '', telefone: '', email: '',
+    nome: '', tipoPessoa: 'PF', documento: '', apelido: '', contato: '', telefone: '', email: '',
     cep: '', rua: '', numero: '', bairro: '', cidade: '', estado: '',
+    atuacao: '', comoFicouSabendo: '', observacoes: '', dataCadastro: '',
   });
   const [buscandoCep, setBuscandoCep] = useState(false);
   const [cepErro, setCepErro] = useState('');
@@ -1145,6 +1232,15 @@ function ClienteForm({ initial, onSave, onCancel }) {
         <label>CPF / CNPJ
           <input value={f.documento} onChange={(e) => setF({ ...f, documento: e.target.value })} />
         </label>
+        <label>Apelido / fantasia
+          <input value={f.apelido} onChange={(e) => setF({ ...f, apelido: e.target.value })} />
+        </label>
+        <label>Contato (com quem falar)
+          <input value={f.contato} onChange={(e) => setF({ ...f, contato: e.target.value })} />
+        </label>
+        <label>Atuação
+          <input value={f.atuacao} onChange={(e) => setF({ ...f, atuacao: e.target.value })} placeholder="médico, dentista, podólogo..." />
+        </label>
         <label>Telefone
           <input value={f.telefone} onChange={(e) => setF({ ...f, telefone: e.target.value })} />
         </label>
@@ -1176,6 +1272,15 @@ function ClienteForm({ initial, onSave, onCancel }) {
         </label>
         <label>Estado
           <input value={f.estado} onChange={(e) => setF({ ...f, estado: e.target.value.toUpperCase() })} maxLength={2} placeholder="SP" />
+        </label>
+        <label>Como ficou sabendo?
+          <input value={f.comoFicouSabendo} onChange={(e) => setF({ ...f, comoFicouSabendo: e.target.value })} placeholder="indicação, Instagram, Google..." />
+        </label>
+        <label>Data de cadastro
+          <input type="date" value={f.dataCadastro || ''} onChange={(e) => setF({ ...f, dataCadastro: e.target.value })} />
+        </label>
+        <label className="span-2">Observações
+          <textarea rows={2} value={f.observacoes} onChange={(e) => setF({ ...f, observacoes: e.target.value })} placeholder="preferências de atendimento, pendências, etc." />
         </label>
       </div>
       <div className="form-actions">
@@ -2077,10 +2182,17 @@ function PrintableCustodia({ os, cliente, equipamento, empresa, tipoNome }) {
 function PrintableEtiqueta({ os, cliente, equipamento, tipoNome }) {
   const itensPresentes = (os.checklistEntrada || []).filter((i) => i.status === 'presente').map((i) => i.descricao).join(', ');
   const numeroCurto = os.numero.replace(/^OS-0*/, '');
+  const linkPublico = os.tokenPublico ? `${window.location.origin}/?os=${os.tokenPublico}` : '';
   return (
     <div className="print-only print-doc etiqueta-sheet">
       <div className="etiqueta-corte">
         <div className="etiqueta-numero-grande">{numeroCurto}</div>
+        {linkPublico && (
+          <div className="etiqueta-qr">
+            <QRCodeSVG value={linkPublico} size={90} level="M" />
+            <span>Escaneie para ver o histórico</span>
+          </div>
+        )}
       </div>
 
       <div className="cut-line"><span>✂ corte aqui — cole no equipamento</span></div>
@@ -2174,6 +2286,21 @@ function OsDetailView({ os, cliente, equipamento, empresa, tiposEquipamento, tec
   useEffect(() => { if (printJob) window.print(); }, [printJob]);
   function triggerPrint(target) { setPrintJob({ target, seq: Date.now() }); }
 
+  function linkPublico() {
+    return `${window.location.origin}/?os=${os.tokenPublico}`;
+  }
+  function copiarLinkPublico() {
+    navigator.clipboard.writeText(linkPublico())
+      .then(() => window.alert('Link copiado.'))
+      .catch(() => window.alert(linkPublico()));
+  }
+  function enviarLinkWhatsapp() {
+    const numero = telefoneParaWhatsapp(cliente?.telefone);
+    if (!numero) { window.alert('Este cliente não tem telefone cadastrado.'); return; }
+    const mensagem = `Olá! Segue o link da sua OS ${os.numero} na Laxis: ${linkPublico()}`;
+    window.open(`https://wa.me/${numero}?text=${encodeURIComponent(mensagem)}`, '_blank');
+  }
+
   function patchItem(section, itemId, patch) {
     onUpdate({ ...os, [section]: os[section].map((it) => (it.id === itemId ? { ...it, ...patch } : it)) });
   }
@@ -2221,6 +2348,8 @@ function OsDetailView({ os, cliente, equipamento, empresa, tiposEquipamento, tec
             {!isExterno && <button className="btn ghost small" onClick={() => triggerPrint('custodia')}>Imprimir Custódia</button>}
             {!isExterno && <button className="btn ghost small" onClick={() => triggerPrint('etiqueta')}>Imprimir Etiqueta</button>}
             <button className="btn ghost small" onClick={() => triggerPrint('os')}>Imprimir OS</button>
+            {os.tokenPublico && <button className="btn ghost small" onClick={copiarLinkPublico}>Copiar link</button>}
+            {os.tokenPublico && <button className="btn ghost small" onClick={enviarLinkWhatsapp}>Enviar WhatsApp</button>}
           </div>
         </div>
 
@@ -2249,6 +2378,10 @@ function OsDetailView({ os, cliente, equipamento, empresa, tiposEquipamento, tec
           <div>
             <span className="label">Data de conclusão</span>
             <input className="meta-select" type="date" value={os.dataConclusao || ''} onChange={(e) => onUpdate({ ...os, dataConclusao: e.target.value })} />
+          </div>
+          <div>
+            <span className="label">Data de pagamento</span>
+            <input className="meta-select" type="date" value={os.dataPagamento || ''} onChange={(e) => onUpdate({ ...os, dataPagamento: e.target.value })} />
           </div>
           {isExterno && (
             <>
@@ -2575,6 +2708,12 @@ function AppAutenticado({ usuario, onLogout }) {
     return resultado;
   }
 
+  async function importarClientes(payload) {
+    const resultado = await api.post('/importar_clientes.php', payload);
+    await carregarTudo();
+    return resultado;
+  }
+
   async function addCliente(data) {
     const novo = await api.post('/clientes.php', data);
     setDb((prev) => ({ ...prev, clientes: [...prev.clientes, novo] }));
@@ -2801,6 +2940,7 @@ function AppAutenticado({ usuario, onLogout }) {
           />
         )}
         {view === 'importar' && usuario.papel === 'gestao' && <ImportarOrdensView db={db} onImportar={importarOrdens} />}
+        {view === 'importarClientes' && usuario.papel === 'gestao' && <ImportarClientesView onImportar={importarClientes} />}
         {view === 'empresa' && <EmpresaForm empresa={db.empresa} onSave={updateEmpresa} />}
         {view === 'parametros' && (
           <ParametrosView
@@ -2813,6 +2953,146 @@ function AppAutenticado({ usuario, onLogout }) {
         )}
         {view === 'usuarios' && usuario.papel === 'gestao' && <UsuariosView usuarioAtual={usuario} />}
       </main>
+    </div>
+  );
+}
+
+export function PublicOsView({ token }) {
+  const [estado, setEstado] = useState('carregando'); // carregando | ok | erro
+  const [os, setOs] = useState(null);
+  const [erro, setErro] = useState('');
+
+  useEffect(() => {
+    fetch(`${API_BASE}/os_publica.php?token=${encodeURIComponent(token)}`)
+      .then(async (res) => {
+        let payload = null;
+        try { payload = await res.json(); } catch { payload = null; }
+        if (!res.ok || !payload || payload.ok === false) {
+          throw new Error((payload && payload.erro) || 'Não foi possível carregar esta ordem de serviço.');
+        }
+        return payload.data;
+      })
+      .then((data) => { setOs(data); setEstado('ok'); })
+      .catch((e) => { setErro(e.message); setEstado('erro'); });
+  }, [token]);
+
+  if (estado === 'carregando') {
+    return <div className="bancada-app"><style>{CSS}</style><div className="loading-screen">Carregando…</div></div>;
+  }
+  if (estado === 'erro') {
+    return (
+      <div className="bancada-app"><style>{CSS}</style>
+        <div className="loading-screen" style={{ flexDirection: 'column', gap: 10 }}>
+          <strong>Não foi possível abrir esta OS</strong>
+          <span className="muted small">{erro}</span>
+        </div>
+      </div>
+    );
+  }
+
+  const s = os.servico;
+
+  return (
+    <div style={{ background: '#e9edf1', minHeight: '100vh', padding: '24px 12px' }}>
+      <style>{CSS}</style>
+      <div className="screen-only" style={{ maxWidth: 720, margin: '0 auto 14px', display: 'flex', justifyContent: 'flex-end' }}>
+        <button className="btn primary" onClick={() => window.print()}>Imprimir / Salvar PDF</button>
+      </div>
+
+      <div className="print-doc" style={{ maxWidth: 720, margin: '0 auto', background: '#fff', padding: 28, borderRadius: 8, boxShadow: '0 2px 12px rgba(0,0,0,0.08)' }}>
+        <div className="print-header">
+          <div className="print-header-left">
+            {os.empresa.logoUrl ? <img src={os.empresa.logoUrl} alt="logo" className="print-logo" /> : <div className="print-logo-placeholder">{os.empresa.nome || 'Empresa'}</div>}
+            <h1>Ordem de Serviço</h1>
+          </div>
+          <div className="print-header-right">
+            <div className="print-os-number"><span>Ordem de Serviço</span><strong>{os.numero}</strong></div>
+            <div className="print-dates"><span>Abertura: {fmtDate(os.dataEntrada)}</span><span>Conclusão: {fmtDate(os.dataConclusao)}</span></div>
+            <div className="badge" style={{ marginTop: 6 }}>{STATUS_META[os.status]?.label || os.status}</div>
+          </div>
+        </div>
+
+        <section className="print-section">
+          <h2>Dados do cliente</h2>
+          <p>{os.cliente.nome}{os.cliente.telefone ? ` - ${os.cliente.telefone}` : ''}</p>
+          <p>{os.cliente.endereco}{os.cliente.documento ? ` - CPF/CNPJ: ${os.cliente.documento}` : ''}</p>
+        </section>
+
+        <section className="print-section print-grid-2">
+          <div>
+            <h2>Dados do produto/serviço</h2>
+            <p><strong>Equip.:</strong> {os.equipamento.tipo || '—'}</p>
+            <p><strong>Nº de série:</strong> {os.equipamento.numeroSerie || '—'}</p>
+          </div>
+          <div>
+            <p><strong>Marca:</strong> {os.equipamento.marca || '—'}</p>
+            <p><strong>Data fabr.:</strong> {os.equipamento.dataFabricacao || '—'}</p>
+            <p><strong>Tensão:</strong> {os.equipamento.tensao || '—'}</p>
+            <p><strong>Garantia equip.:</strong> {os.garantiaEquipamento === 'sim' ? 'Sim' : os.garantiaEquipamento === 'nao' ? 'Não' : '—'}</p>
+          </div>
+        </section>
+
+        {os.observacoesGerais && (
+          <section className="print-section">
+            <h2>Relato / solicitação do cliente</h2>
+            <p>{os.observacoesGerais}</p>
+          </section>
+        )}
+
+        <section className="print-section">
+          <h2>Serviço realizado</h2>
+          <p>{s.descricaoServico || '—'}</p>
+        </section>
+
+        <section className="print-section">
+          <h2>Peças utilizadas</h2>
+          <table className="print-table">
+            <thead><tr><th>Item</th><th>Descrição</th><th>Valor</th></tr></thead>
+            <tbody>
+              {s.pecas.length === 0 && <tr><td colSpan={3} className="print-muted">Nenhuma peça utilizada</td></tr>}
+              {s.pecas.map((p, i) => (<tr key={p.id || i}><td>{i + 1}</td><td>{p.descricao}</td><td>{fmtMoney(p.preco)}</td></tr>))}
+            </tbody>
+          </table>
+        </section>
+
+        <section className="print-section print-grid-2">
+          <div className="sig-approval">
+            <span>{s.aprovado === 'aprovado' ? '☑' : '☐'} Aprovado</span>
+            <span>{s.aprovado === 'reprovado' ? '☑' : '☐'} Reprovado</span>
+            <span>{s.aprovado === 'descarte' ? '☑' : '☐'} Descarte</span>
+          </div>
+          <div className="print-totals">
+            <div><span>Total de peças</span><strong>{fmtMoney(s.subtotalPecas)}</strong></div>
+            <div><span>Total de mão de obra</span><strong>{fmtMoney(s.valorServico)}</strong></div>
+            <div><span>Frete / deslocamento</span><strong>{fmtMoney(s.deslocamento)}</strong></div>
+            <div><span>Desconto</span><strong>{fmtMoney(s.desconto)}</strong></div>
+            <div className="print-total-final"><span>TOTAL</span><strong>{fmtMoney(s.totalGeral)}</strong></div>
+          </div>
+        </section>
+
+        <p className="print-payment">Forma de pagamento: {s.formaPagamento || '—'}</p>
+
+        <section className="print-section">
+          <h2>Observações</h2>
+          <p>{os.empresa.garantiaPadraoInterno}</p>
+        </section>
+
+        <div className="print-footer">
+          {os.empresa.endereco}{os.empresa.cidade ? `, ${os.empresa.cidade}` : ''}{os.empresa.uf ? `/${os.empresa.uf}` : ''}{os.empresa.cep ? ` - CEP ${os.empresa.cep}` : ''}{os.empresa.telefone ? ` - ${os.empresa.telefone}` : ''}{os.empresa.email ? ` - ${os.empresa.email}` : ''}<br />
+          {os.empresa.cnpj ? `CNPJ: ${os.empresa.cnpj}` : ''}{os.empresa.ie ? ` | I.E. ${os.empresa.ie}` : ''}{os.empresa.im ? ` | I.M. ${os.empresa.im}` : ''}
+        </div>
+
+        {os.fotos.length > 0 && (
+          <div className="print-photos-page">
+            <h2>Fotos do serviço — OS {os.numero}</h2>
+            <div className="print-photos-grid">
+              {os.fotos.map((f) => (
+                <figure key={f.id}><img src={`${API_BASE}/${f.url}`} alt={f.legenda || ''} />{f.legenda && <figcaption>{f.legenda}</figcaption>}</figure>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -3115,8 +3395,10 @@ const CSS = `
 
 /* etiqueta interna — folha inteira: número grande pra cortar + ficha pra prancheta */
 .etiqueta-sheet { display: flex; flex-direction: column; min-height: 260mm; }
-.etiqueta-corte { display: flex; align-items: center; justify-content: center; flex: 0 0 90mm; }
+.etiqueta-corte { display: flex; align-items: center; justify-content: center; gap: 24px; flex: 0 0 90mm; }
 .etiqueta-numero-grande { font-family: 'IBM Plex Mono', monospace; font-weight: 600; font-size: 160px; line-height: 1; text-align: center; border: 3px dashed #A97B37; background: #F3E7D3; color: #A97B37; border-radius: 16px; padding: 20px 40px; }
+.etiqueta-qr { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.etiqueta-qr span { font-size: 9px; max-width: 100px; text-align: center; color: #666; }
 .tag-ficha { flex: 1; padding-top: 6mm; }
 .tag-ficha-header { display: flex; align-items: center; gap: 12px; border-bottom: 2px solid #24384A; padding-bottom: 8px; margin-bottom: 10px; }
 .tag-title { font-family: 'Space Grotesk', sans-serif; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: #666; }

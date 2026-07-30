@@ -16,6 +16,7 @@ function formatarOrdem(PDO $pdo, array $row): array {
     return [
         'id' => (int) $row['id'],
         'numero' => $row['numero'],
+        'tokenPublico' => $row['token_publico'],
         'clienteId' => (int) $row['cliente_id'],
         'equipamentoId' => (int) $row['equipamento_id'],
         'tipoAtendimento' => $row['tipo_atendimento'],
@@ -29,6 +30,7 @@ function formatarOrdem(PDO $pdo, array $row): array {
         'observacoesGerais' => $row['observacoes_gerais'],
         'garantiaEquipamento' => $row['garantia_equipamento'],
         'dataConclusao' => $row['data_conclusao'],
+        'dataPagamento' => $row['data_pagamento'],
         'dataEntrega' => $row['data_entrega'],
         'checklistEntrada' => json_decode($row['checklist_entrada'] ?? '[]', true) ?? [],
         'checklistPreOrcamento' => json_decode($row['checklist_pre_orcamento'] ?? '[]', true) ?? [],
@@ -62,15 +64,16 @@ if ($metodo === 'POST') {
     // número sequencial OS-0001, respeitando o maior já usado
     $max = (int) $pdo->query("SELECT COALESCE(MAX(CAST(SUBSTRING(numero, 4) AS UNSIGNED)), 0) FROM ordens")->fetchColumn();
     $numero = 'OS-' . str_pad((string) ($max + 1), 4, '0', STR_PAD_LEFT);
+    $tokenPublico = bin2hex(random_bytes(16)); // link público — nunca usa o número sequencial
 
     $stmt = $pdo->prepare(
-        'INSERT INTO ordens (numero, cliente_id, equipamento_id, tipo_atendimento, data_entrada, origem, tipo_manutencao,
+        'INSERT INTO ordens (numero, token_publico, cliente_id, equipamento_id, tipo_atendimento, data_entrada, origem, tipo_manutencao,
             tecnico, status, observacoes_gerais, garantia_equipamento, checklist_entrada, checklist_pre_orcamento,
             checklist_pos_orcamento, checklist_atendimento, orcamento, criado_por)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
     );
     $stmt->execute([
-        $numero, (int) $body['clienteId'], (int) $body['equipamentoId'],
+        $numero, $tokenPublico, (int) $body['clienteId'], (int) $body['equipamentoId'],
         $body['tipoAtendimento'] ?? 'interno', $body['dataEntrada'] ?? date('Y-m-d'),
         $body['origem'] ?? 'cliente_trouxe', $body['tipoManutencao'] ?? 'preventiva', $body['tecnico'] ?? '',
         'recebido', $body['observacoesGerais'] ?? '', 'nao_informado',
@@ -103,7 +106,7 @@ if ($metodo === 'PUT') {
         'tipoAtendimento' => 'tipo_atendimento', 'dataEntrada' => 'data_entrada', 'origem' => 'origem',
         'tipoManutencao' => 'tipo_manutencao', 'tecnico' => 'tecnico', 'status' => 'status',
         'horaInicio' => 'hora_inicio', 'horaFim' => 'hora_fim', 'observacoesGerais' => 'observacoes_gerais',
-        'garantiaEquipamento' => 'garantia_equipamento', 'dataConclusao' => 'data_conclusao', 'dataEntrega' => 'data_entrega',
+        'garantiaEquipamento' => 'garantia_equipamento', 'dataConclusao' => 'data_conclusao', 'dataPagamento' => 'data_pagamento', 'dataEntrega' => 'data_entrega',
     ];
     $jsonMap = [
         'checklistEntrada' => 'checklist_entrada', 'checklistPreOrcamento' => 'checklist_pre_orcamento',
