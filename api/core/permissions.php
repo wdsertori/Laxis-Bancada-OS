@@ -40,7 +40,7 @@ return [
     'ordens.fotos.gerenciar'  => ['gestao', 'administrativo', 'tecnico'],
 
     // catálogo de peças
-    'pecas.ver'       => ['gestao', 'administrativo'],
+    'pecas.ver'       => ['gestao', 'administrativo', 'tecnico'],
     'pecas.gerenciar' => ['gestao', 'administrativo'],
 
     // dados do sistema (backup/import por conjunto)

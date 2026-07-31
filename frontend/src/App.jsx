@@ -2681,23 +2681,37 @@ function AppAutenticado({ usuario, onLogout }) {
   async function carregarTudo() {
     setLoading(true);
     setErroCarregamento('');
-    try {
-      const [clientes, equipamentos, tiposEquipamento, ordens, pecasCatalogo, empresaDados, parametros, tecnicos] = await Promise.all([
-        api.get('/clientes.php'),
-        api.get('/equipamentos.php'),
-        api.get('/tipos_equipamento.php'),
-        api.get('/ordens.php'),
-        api.get('/pecas.php'),
-        api.get('/empresa.php'),
-        api.get('/parametros.php'),
-        api.get('/usuarios.php?apenas=tecnicos'),
-      ]);
-      setDb({ clientes, equipamentos, tiposEquipamento, ordens, pecasCatalogo, tecnicos, empresa: { ...empresaDados, ...parametros } });
-    } catch (e) {
-      setErroCarregamento(e.message || 'Falha ao carregar dados do servidor.');
-    } finally {
-      setLoading(false);
-    }
+    const specs = [
+      ['clientes', '/clientes.php', []],
+      ['equipamentos', '/equipamentos.php', []],
+      ['tiposEquipamento', '/tipos_equipamento.php', []],
+      ['ordens', '/ordens.php', []],
+      ['pecasCatalogo', '/pecas.php', []],
+      ['empresaDados', '/empresa.php', {}],
+      ['parametros', '/parametros.php', {}],
+      ['tecnicos', '/usuarios.php?apenas=tecnicos', []],
+    ];
+    const resultados = await Promise.allSettled(specs.map(([, path]) => api.get(path)));
+    const dados = {};
+    const falhas = [];
+    resultados.forEach((r, i) => {
+      const [chave, path, padrao] = specs[i];
+      if (r.status === 'fulfilled') {
+        dados[chave] = r.value;
+      } else {
+        dados[chave] = padrao;
+        falhas.push(`${path.replace('/', '').replace('.php', '')}: ${r.reason?.message || 'falhou'}`);
+      }
+    });
+    // Um endpoint falhando (ex: permissão faltando pra um papel) não derruba
+    // o app inteiro mais — carrega o resto normalmente e mostra um aviso.
+    setDb({
+      clientes: dados.clientes, equipamentos: dados.equipamentos, tiposEquipamento: dados.tiposEquipamento,
+      ordens: dados.ordens, pecasCatalogo: dados.pecasCatalogo, tecnicos: dados.tecnicos,
+      empresa: { ...dados.empresaDados, ...dados.parametros },
+    });
+    if (falhas.length > 0) { setErroCarregamento(`Não carregou: ${falhas.join(' | ')}`); }
+    setLoading(false);
   }
 
   useEffect(() => { carregarTudo(); }, []);
@@ -2885,8 +2899,19 @@ function AppAutenticado({ usuario, onLogout }) {
   function goToView(key) { setSelectedOsId(null); setView(key); }
   function goNovaOs() { setSelectedOsId(null); setView('ordens'); setForceOpenForm(true); }
 
-  if (loading || !db) {
+  if (loading) {
     return <div className="bancada-app"><style>{CSS}</style><div className="loading-screen">Carregando…</div></div>;
+  }
+  if (!db) {
+    return (
+      <div className="bancada-app"><style>{CSS}</style>
+        <div className="loading-screen" style={{ flexDirection: 'column', gap: 10 }}>
+          <strong>Não foi possível carregar o sistema</strong>
+          <span className="muted small">{erroCarregamento || 'Erro desconhecido.'}</span>
+          <button className="btn primary" onClick={carregarTudo}>Tentar de novo</button>
+        </div>
+      </div>
+    );
   }
 
   const selectedOs = selectedOsId ? db.ordens.find((o) => o.id === selectedOsId) : null;
@@ -2894,6 +2919,12 @@ function AppAutenticado({ usuario, onLogout }) {
   return (
     <div className="bancada-app">
       <style>{CSS}</style>
+      {erroCarregamento && (
+        <div className="screen-only" style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 50, background: '#fdecea', color: '#a12b1f', padding: '8px 16px', fontSize: 12.5, display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 1px 4px rgba(0,0,0,0.15)' }}>
+          <span>{erroCarregamento}</span>
+          <button className="btn ghost small" onClick={carregarTudo}>Tentar de novo</button>
+        </div>
+      )}
       <aside className="sidebar">
         <SidebarBrand nomeEmpresa={db.empresa.nome} />
         <nav>
@@ -3151,7 +3182,7 @@ const CSS = `
 .bancada-app button { font-family: inherit; cursor: pointer; }
 .bancada-app input, .bancada-app select, .bancada-app textarea { font-family: inherit; font-size: 13.5px; }
 
-.loading-screen { padding: 60px; color: var(--ink-muted); font-family: 'IBM Plex Mono', monospace; }
+.loading-screen { padding: 60px; color: var(--ink-muted); font-family: 'IBM Plex Mono', monospace; display: flex; align-items: center; justify-content: center; text-align: center; }
 
 /* sidebar */
 .sidebar { width: 216px; flex-shrink: 0; background: var(--navy); color: #EDEFEC; display: flex; flex-direction: column; padding: 22px 14px; gap: 18px; min-height: 100vh; }
