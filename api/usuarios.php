@@ -10,12 +10,13 @@ $id = isset($_GET['id']) ? (int) $_GET['id'] : null;
 $PAPEIS_VALIDOS = ['gestao', 'administrativo', 'tecnico'];
 
 if ($metodo === 'GET') {
-    // Modo restrito: só nomes de técnicos ativos, para o campo "técnico
-    // responsável" ao preencher uma OS. Administrativo precisa disso mas
-    // não deveria ver e-mails/papéis de todo mundo (isso é 'usuarios.ver').
+    // Modo restrito: nomes de todos os usuários ativos, para o campo "técnico
+    // responsável" ao preencher uma OS — qualquer papel pode ser o responsável
+    // por um atendimento, não só quem tem papel="tecnico". Quem só PODE VER
+    // uma OS (inclusive técnico) também precisa dessa lista, não só quem cria.
     if (isset($_GET['apenas']) && $_GET['apenas'] === 'tecnicos') {
-        Auth::requirePermission('ordens.criar'); // quem abre OS precisa poder escolher o técnico
-        $rows = $pdo->query("SELECT id, nome FROM usuarios WHERE papel = 'tecnico' AND ativo = 1 ORDER BY nome")->fetchAll();
+        Auth::requirePermission('ordens.ver');
+        $rows = $pdo->query("SELECT id, nome FROM usuarios WHERE ativo = 1 ORDER BY nome")->fetchAll();
         Response::ok($rows);
     }
     Auth::requirePermission('usuarios.ver');
