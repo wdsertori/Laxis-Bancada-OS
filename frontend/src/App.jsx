@@ -39,7 +39,11 @@ function uid() {
   return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
 }
 function todayStr() {
-  return new Date().toISOString().slice(0, 10);
+  // Componentes LOCAIS, não toISOString() (que é UTC) — em UTC-3 (Brasil),
+  // usar toISOString direto vira o dia errado depois das ~21h. Testado e confirmado.
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 function fmtDate(d) {
   if (!d) return '—';
@@ -556,27 +560,15 @@ function DadosSection({ db, onExportDataset, onDownloadTemplate, onExportBackup 
 }
 
 const CAMPOS_IMPORTACAO = [
+  { key: 'clienteCodigo', label: 'Código do cliente (se souber)' },
   { key: 'clienteNome', label: 'Nome do cliente', obrigatorio: true },
-  { key: 'clienteApelido', label: 'Apelido / fantasia do cliente' },
-  { key: 'clienteDocumento', label: 'CPF / CNPJ do cliente' },
-  { key: 'clienteContato', label: 'Contato do cliente (com quem falar)' },
-  { key: 'clienteTelefone', label: 'Telefone / WhatsApp do cliente' },
-  { key: 'clienteEmail', label: 'E-mail do cliente' },
-  { key: 'clienteCep', label: 'CEP do cliente' },
-  { key: 'clienteRua', label: 'Endereço do cliente' },
-  { key: 'clienteNumero', label: 'Número do endereço' },
-  { key: 'clienteBairro', label: 'Bairro do cliente' },
-  { key: 'clienteCidade', label: 'Cidade do cliente' },
-  { key: 'clienteEstado', label: 'Estado do cliente' },
-  { key: 'clienteAtuacao', label: 'Atuação do cliente' },
-  { key: 'clienteComoFicouSabendo', label: 'Como o cliente ficou sabendo' },
-  { key: 'clienteObservacoes', label: 'Observações do cliente' },
-  { key: 'clienteDataCadastro', label: 'Data de cadastro do cliente' },
   { key: 'equipamentoTipoNome', label: 'Tipo de equipamento (nome)' },
   { key: 'equipamentoMarca', label: 'Marca do equipamento' },
   { key: 'equipamentoModelo', label: 'Modelo do equipamento' },
   { key: 'equipamentoNumeroSerie', label: 'Número de série' },
   { key: 'equipamentoPatrimonio', label: 'Patrimônio' },
+  { key: 'equipamentoTensao', label: 'Tensão do equipamento' },
+  { key: 'garantiaEquipamento', label: 'Garantia do equipamento (sim / não)' },
   { key: 'numero', label: 'Número da OS (se já existir um)' },
   { key: 'dataEntrada', label: 'Data de entrada' },
   { key: 'dataConclusao', label: 'Data de conclusão' },
@@ -587,6 +579,8 @@ const CAMPOS_IMPORTACAO = [
   { key: 'tipoManutencao', label: 'Tipo de manutenção (preventiva / corretiva / preditiva / preventiva_corretiva)' },
   { key: 'tipoAtendimento', label: 'Tipo de atendimento (interno / externo)' },
   { key: 'tecnico', label: 'Técnico responsável' },
+  { key: 'observacoesGerais', label: 'Solicitação do cliente / relato' },
+  { key: 'descricaoServico', label: 'Descrição do serviço realizado' },
   { key: 'valorServico', label: 'Valor de mão de obra' },
   { key: 'deslocamento', label: 'Frete / deslocamento' },
   { key: 'desconto', label: 'Desconto' },
@@ -646,7 +640,12 @@ function ImportadorPlanilha({ titulo, descricao, campos, campoObrigatorio, campo
 
   function formatarValor(campoKey, bruto) {
     if (/data/i.test(campoKey) && bruto instanceof Date) {
-      return bruto.toISOString().slice(0, 10);
+      // Usa os componentes LOCAIS (getFullYear/getMonth/getDate), não
+      // toISOString() — o SheetJS ancora a data lida do Excel de um jeito
+      // que só bate certo pelos getters locais; toISOString (que é UTC)
+      // pode voltar um dia em fusos à frente de UTC. Testado e confirmado.
+      const pad = (n) => String(n).padStart(2, '0');
+      return `${bruto.getFullYear()}-${pad(bruto.getMonth() + 1)}-${pad(bruto.getDate())}`;
     }
     return String(bruto ?? '').trim();
   }
@@ -802,6 +801,7 @@ function ImportarOrdensView({ db, onImportar }) {
 }
 
 const CAMPOS_IMPORTACAO_CLIENTES = [
+  { key: 'codigo', label: 'Código (se já for cliente existente no sistema)' },
   { key: 'nome', label: 'Nome / Razão Social', obrigatorio: true },
   { key: 'apelido', label: 'Apelido / Fantasia' },
   { key: 'documento', label: 'CNPJ / CPF' },
@@ -811,6 +811,7 @@ const CAMPOS_IMPORTACAO_CLIENTES = [
   { key: 'cep', label: 'CEP' },
   { key: 'rua', label: 'Endereço' },
   { key: 'numero', label: 'Número' },
+  { key: 'complemento', label: 'Complemento' },
   { key: 'bairro', label: 'Bairro' },
   { key: 'cidade', label: 'Cidade' },
   { key: 'estado', label: 'Estado' },
@@ -1185,7 +1186,7 @@ function FotosSection({ ordemId, fotos, onUpload, onRemove }) {
 function ClienteForm({ initial, onSave, onCancel }) {
   const [f, setF] = useState(initial || {
     nome: '', tipoPessoa: 'PF', documento: '', apelido: '', contato: '', telefone: '', email: '',
-    cep: '', rua: '', numero: '', bairro: '', cidade: '', estado: '',
+    cep: '', rua: '', numero: '', complemento: '', bairro: '', cidade: '', estado: '',
     atuacao: '', comoFicouSabendo: '', observacoes: '', dataCadastro: '',
   });
   const [buscandoCep, setBuscandoCep] = useState(false);
@@ -1263,6 +1264,9 @@ function ClienteForm({ initial, onSave, onCancel }) {
         </label>
         <label>Número
           <input value={f.numero} onChange={(e) => setF({ ...f, numero: e.target.value })} />
+        </label>
+        <label>Complemento
+          <input value={f.complemento} onChange={(e) => setF({ ...f, complemento: e.target.value })} placeholder="sala, loja, andar..." />
         </label>
         <label>Bairro
           <input value={f.bairro} onChange={(e) => setF({ ...f, bairro: e.target.value })} />
