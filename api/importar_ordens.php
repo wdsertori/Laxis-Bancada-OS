@@ -4,18 +4,25 @@
  *
  * POST /api/importar_ordens.php
  * Body: {
- *   linhas: [{ clienteNome, clienteDocumento, clienteTelefone, clienteEmail,
- *              equipamentoTipoNome, equipamentoMarca, equipamentoModelo, equipamentoNumeroSerie, equipamentoPatrimonio,
- *              numero, dataEntrada, dataConclusao, dataEntrega, status, tipoManutencao, tipoAtendimento,
- *              tecnico, observacoesGerais }, ...],
+ *   linhas: [{ clienteCodigo, clienteNome,
+ *              equipamentoTipoNome, equipamentoMarca, equipamentoModelo, equipamentoNumeroSerie,
+ *              equipamentoPatrimonio, equipamentoTensao, garantiaEquipamento,
+ *              numero, dataEntrada, dataConclusao, dataPagamento, dataEntrega, status, aprovado,
+ *              tipoManutencao, tipoAtendimento, tecnico, observacoesGerais, descricaoServico,
+ *              valorServico, deslocamento, desconto, formaPagamento, acessorios,
+ *              peca1Nome..peca10Nome, peca1Valor..peca10Valor }, ...],
  *   tipoEquipamentoPadraoId: int|null
  * }
  *
- * Para cada linha: encontra ou cria o cliente (por nome), encontra ou cria o
- * equipamento (por número de série, ou marca+modelo, dentro do mesmo cliente),
- * e insere a OS diretamente (sem forçar status "recebido" como o POST normal
- * de ordens.php faz — aqui o status/datas vêm da própria planilha, porque é
- * dado histórico). Uma linha com erro não derruba o restante da importação.
+ * Cliente é buscado por código (se informado) ou por nome; se nenhum dos
+ * dois encontrar, cria um cliente NOVO só com o nome — dados completos de
+ * cliente (endereço, contato etc.) entram pela importação de clientes
+ * dedicada, não por aqui, pra não duplicar preenchimento nas duas planilhas.
+ * Equipamento é encontrado ou criado (por número de série, ou marca+modelo,
+ * dentro do mesmo cliente). A OS é inserida diretamente (sem forçar status
+ * "recebido" como o POST normal de ordens.php faz — aqui o status/datas vêm
+ * da própria planilha, porque é dado histórico). Uma linha com erro não
+ * derruba o restante da importação.
  */
 require_once __DIR__ . '/bootstrap.php';
 
@@ -59,6 +66,26 @@ function mapearAprovado(string $bruto): string {
     return 'pendente';
 }
 
+function mapearGarantia(string $bruto): string {
+    $t = strtolower(trim($bruto));
+    $t = preg_replace('/[^a-z]/', '', $t);
+    if (in_array($t, ['sim', 's', 'yes'], true)) { return 'sim'; }
+    if (in_array($t, ['nao', 'n', 'no'], true)) { return 'nao'; }
+    return 'nao_informado';
+}
+
+function mapearStatus(string $bruto): string {
+    // "aprovado"/"reprovado" não são mais Status válidos — a decisão do
+    // cliente já fica no campo Aprovado; o Status de uma OS já decidida
+    // (aprovada, reprovada ou descartada) é sempre "concluido".
+    $validos = ['recebido', 'em_orcamento', 'aguardando_aprovacao', 'em_execucao', 'concluido', 'entregue'];
+    $t = strtolower(trim($bruto));
+    $t = preg_replace('/[^a-z_]/', '', $t);
+    if (in_array($t, ['aprovado', 'reprovado', 'descarte', 'cancelado'], true)) { return 'concluido'; }
+    if (in_array($t, $validos, true)) { return $t; }
+    return 'recebido';
+}
+
 $avisos = [];
 $criadosClientes = 0;
 $criadosEquipamentos = 0;
@@ -72,12 +99,9 @@ try {
         "SELECT COALESCE(MAX(CAST(SUBSTRING(numero, 4) AS UNSIGNED)), 0) FROM ordens"
     )->fetchColumn();
 
+    $stmtClientePorCodigo = $pdo->prepare('SELECT id FROM clientes WHERE codigo = ? LIMIT 1');
     $stmtClientePorNome = $pdo->prepare('SELECT id FROM clientes WHERE LOWER(nome) = LOWER(?) LIMIT 1');
-    $stmtInsereCliente = $pdo->prepare(
-        'INSERT INTO clientes (codigo, nome, tipo_pessoa, documento, apelido, contato, telefone, email,
-            cep, rua, numero, bairro, cidade, estado, atuacao, como_ficou_sabendo, observacoes, data_cadastro)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-    );
+    $stmtInsereCliente = $pdo->prepare('INSERT INTO clientes (codigo, nome, tipo_pessoa) VALUES (?, ?, ?)');
     $stmtMaxCodigo = $pdo->query('SELECT COALESCE(MAX(CAST(codigo AS UNSIGNED)), 0) FROM clientes');
     $proximoCodigoCliente = (int) $stmtMaxCodigo->fetchColumn();
 
@@ -104,26 +128,37 @@ try {
             if (!is_array($linha)) { continue; }
 
             $nomeCliente = valor($linha, 'clienteNome');
-            if ($nomeCliente === '') {
-                $avisos[] = "Linha {$numeroLinha}: sem nome de cliente — ignorada.";
+            $codigoCliente = valor($linha, 'clienteCodigo');
+            if ($nomeCliente === '' && $codigoCliente === '') {
+                $avisos[] = "Linha {$numeroLinha}: sem nome nem código de cliente — ignorada.";
                 continue;
             }
 
-            // --- cliente: encontra ou cria ---
-            $stmtClientePorNome->execute([$nomeCliente]);
-            $clienteId = $stmtClientePorNome->fetchColumn();
+            // --- cliente: código tem prioridade (evita ambiguidade de nomes
+            // repetidos); sem código, busca por nome; se não achar por
+            // nenhum dos dois, cria um cliente mínimo só com o nome — o
+            // resto dos dados dele entra pela importação de clientes, não
+            // por aqui, pra não duplicar o preenchimento nas duas planilhas.
+            $clienteId = null;
+            if ($codigoCliente !== '') {
+                $stmtClientePorCodigo->execute([$codigoCliente]);
+                $clienteId = $stmtClientePorCodigo->fetchColumn() ?: null;
+                if (!$clienteId) {
+                    $avisos[] = "Linha {$numeroLinha}: código de cliente '{$codigoCliente}' não encontrado — tentando por nome.";
+                }
+            }
+            if (!$clienteId && $nomeCliente !== '') {
+                $stmtClientePorNome->execute([$nomeCliente]);
+                $clienteId = $stmtClientePorNome->fetchColumn() ?: null;
+            }
             if (!$clienteId) {
+                if ($nomeCliente === '') {
+                    $avisos[] = "Linha {$numeroLinha}: código '{$codigoCliente}' não encontrado e sem nome pra criar cliente novo — ignorada.";
+                    continue;
+                }
                 $proximoCodigoCliente++;
                 $codigo = str_pad((string) $proximoCodigoCliente, 4, '0', STR_PAD_LEFT);
-                $stmtInsereCliente->execute([
-                    $codigo, $nomeCliente, 'PF', valor($linha, 'clienteDocumento'),
-                    valor($linha, 'clienteApelido'), valor($linha, 'clienteContato'),
-                    valor($linha, 'clienteTelefone'), valor($linha, 'clienteEmail'),
-                    valor($linha, 'clienteCep'), valor($linha, 'clienteRua'), valor($linha, 'clienteNumero'),
-                    valor($linha, 'clienteBairro'), valor($linha, 'clienteCidade'), valor($linha, 'clienteEstado'),
-                    valor($linha, 'clienteAtuacao'), valor($linha, 'clienteComoFicouSabendo'), valor($linha, 'clienteObservacoes'),
-                    valor($linha, 'clienteDataCadastro') ?: null,
-                ]);
+                $stmtInsereCliente->execute([$codigo, $nomeCliente, 'PF']);
                 $clienteId = (int) $pdo->lastInsertId();
                 $criadosClientes++;
             }
@@ -176,7 +211,7 @@ try {
                 $numero = 'OS-' . str_pad((string) $proximoSeq, 4, '0', STR_PAD_LEFT);
             }
 
-            $status = valor($linha, 'status') ?: 'recebido';
+            $status = mapearStatus(valor($linha, 'status'));
             $dataEntrada = valor($linha, 'dataEntrada') ?: date('Y-m-d');
             $dataConclusao = valor($linha, 'dataConclusao') ?: null;
             $dataPagamento = valor($linha, 'dataPagamento') ?: null;
@@ -209,12 +244,14 @@ try {
             $obsInternas = implode(' — ', $partesObs);
 
             $orcamento = json_encode([
-                'descricaoServico' => '',
+                'descricaoServico' => valor($linha, 'descricaoServico'),
                 'valorServico' => valor($linha, 'valorServico'),
                 'pecas' => $pecasArray,
                 'deslocamento' => valor($linha, 'deslocamento'),
                 'desconto' => valor($linha, 'desconto'),
                 'formaPagamento' => valor($linha, 'formaPagamento'),
+                'numeroNf' => valor($linha, 'numeroNf'),
+                'observacaoCliente' => valor($linha, 'observacaoCliente'),
                 'aprovado' => mapearAprovado(valor($linha, 'aprovado')),
                 'obsInternas' => $obsInternas,
             ], JSON_UNESCAPED_UNICODE);
@@ -223,7 +260,7 @@ try {
                 $numero, bin2hex(random_bytes(16)), $clienteId, $equipamentoId,
                 valor($linha, 'tipoAtendimento') ?: 'interno', $dataEntrada, 'cliente_trouxe',
                 valor($linha, 'tipoManutencao') ?: 'preventiva', valor($linha, 'tecnico'), $status,
-                valor($linha, 'observacoesGerais'), 'nao_informado', $dataConclusao, $dataPagamento, $dataEntrega,
+                valor($linha, 'observacoesGerais'), mapearGarantia(valor($linha, 'garantiaEquipamento')), $dataConclusao, $dataPagamento, $dataEntrega,
                 '[]', '[]', '[]', '[]', $orcamento, $user['id'],
             ]);
             $criadasOrdens++;

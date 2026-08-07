@@ -127,6 +127,8 @@ function normalizeOrcamento(orc) {
     formaPagamento: orc?.formaPagamento ?? '',
     aprovado: orc?.aprovado ?? 'pendente',
     obsInternas: orc?.obsInternas ?? '',
+    numeroNf: orc?.numeroNf ?? '',
+    observacaoCliente: orc?.observacaoCliente ?? '',
   };
 }
 function defaultDb() {
@@ -350,7 +352,7 @@ const DATASET_CONFIG = {
     }),
     template: () => ([{
       numero: 'OS-0001 (se já existir, atualiza; se não, cria)', clienteCodigo: '0001', equipamentoNumeroSerie: 'deixe vazio se o equipamento não tiver série',
-      tipoAtendimento: 'interno ou externo', status: 'recebido', dataEntrada: '2026-01-31', tipoManutencao: 'preventiva | corretiva | preditiva',
+      tipoAtendimento: 'interno ou externo', status: 'recebido', dataEntrada: '2026-01-31', tipoManutencao: 'preventiva | corretiva | preventiva_corretiva | montagem_instalacao',
       tecnico: '', origem: 'cliente_trouxe | retirada', observacoesGerais: '',
       checklistEntrada: [], checklistPreOrcamento: [], checklistPosOrcamento: [], checklistAtendimento: [],
       orcamento: { descricaoServico: '', valorServico: '', pecas: [], deslocamento: '', desconto: '', formaPagamento: '', aprovado: 'pendente', obsInternas: '' },
@@ -418,17 +420,49 @@ function getChecklistTemplateForEquip(tiposEquipamento, equip) {
   return getTemplateFor(equip?.tipo); // fallback para equipamentos antigos sem tipo cadastrado no catálogo
 }
 
-const TIPO_LABEL = { preventiva: 'Preventiva', corretiva: 'Corretiva', preditiva: 'Preditiva', preventiva_corretiva: 'Preventiva e Corretiva' };
+const TIPO_LABEL = { preventiva: 'Preventiva', corretiva: 'Corretiva', preventiva_corretiva: 'Preventiva e Corretiva', montagem_instalacao: 'Montagem/Instalação' };
 const STATUS_META = {
   recebido: { label: 'Recebido', tone: 'neutral' },
   em_orcamento: { label: 'Em orçamento', tone: 'amber' },
   aguardando_aprovacao: { label: 'Aguardando aprovação', tone: 'amber' },
-  aprovado: { label: 'Aprovado', tone: 'accent' },
   em_execucao: { label: 'Em execução', tone: 'accent' },
   concluido: { label: 'Concluído', tone: 'success' },
   entregue: { label: 'Entregue', tone: 'success-solid' },
-  reprovado: { label: 'Reprovado / cancelado', tone: 'danger' },
 };
+// Pendências da OS ("Precisam de atenção") — regra combinada v1.1:
+// cada tipo de pendência só entra na lista depois de um prazo de carência
+// contado a partir de um marco diferente. Ver DECISOES-TECNICAS.md.
+const PENDENCIA_GRACE_DIAS = 7;
+const PENDENCIA_LABEL = { tecnico: 'Técnico', aprovacao: 'Aprovação', pagamento: 'Pagamento', retirada: 'Retirada' };
+function diasDesdeData(dataStr) {
+  if (!dataStr) return null;
+  const d = new Date(dataStr + 'T00:00:00');
+  if (isNaN(d)) return null;
+  const hoje = new Date();
+  return Math.floor((hoje - d) / (1000 * 60 * 60 * 24));
+}
+function getPendenciasOs(os) {
+  const orc = normalizeOrcamento(os.orcamento);
+  const pendencias = [];
+  const diasEntrada = diasDesdeData(os.dataEntrada);
+  const diasConclusao = diasDesdeData(os.dataConclusao);
+
+  if (['recebido', 'em_orcamento'].includes(os.status) && diasEntrada !== null && diasEntrada >= PENDENCIA_GRACE_DIAS) {
+    pendencias.push('tecnico');
+  }
+  if (os.status === 'aguardando_aprovacao' && diasEntrada !== null && diasEntrada >= PENDENCIA_GRACE_DIAS) {
+    pendencias.push('aprovacao');
+  }
+  // reprovado/descarte (interno) e não_finalizada (externo) são estados finais negativos — não cobra pagamento
+  const semCobrancaPagamento = ['reprovado', 'descarte', 'nao_finalizada'].includes(orc.aprovado);
+  if (os.dataConclusao && !os.dataPagamento && !semCobrancaPagamento && diasConclusao !== null && diasConclusao >= PENDENCIA_GRACE_DIAS) {
+    pendencias.push('pagamento');
+  }
+  if (os.dataConclusao && !os.dataEntrega && diasConclusao !== null && diasConclusao >= PENDENCIA_GRACE_DIAS) {
+    pendencias.push('retirada');
+  }
+  return pendencias;
+}
 const NAV = [
   { key: 'dashboard', label: 'Painel', icon: LayoutDashboard },
   { key: 'clientes', label: 'Clientes', icon: Users },
@@ -568,29 +602,31 @@ const CAMPOS_IMPORTACAO = [
   { key: 'equipamentoNumeroSerie', label: 'Número de série' },
   { key: 'equipamentoPatrimonio', label: 'Patrimônio' },
   { key: 'equipamentoTensao', label: 'Tensão do equipamento' },
+  { key: 'equipamentoDataFabricacao', label: 'Data de fabricação' },
   { key: 'garantiaEquipamento', label: 'Garantia do equipamento (sim / não)' },
   { key: 'numero', label: 'Número da OS (se já existir um)' },
   { key: 'dataEntrada', label: 'Data de entrada' },
   { key: 'dataConclusao', label: 'Data de conclusão' },
   { key: 'dataPagamento', label: 'Data de pagamento' },
   { key: 'dataEntrega', label: 'Data de entrega' },
-  { key: 'status', label: 'Status (recebido / em_orcamento / aguardando_aprovacao / aprovado / em_execucao / concluido / entregue / reprovado)' },
+  { key: 'status', label: 'Status (recebido / em_orcamento / aguardando_aprovacao / em_execucao / concluido / entregue)' },
   { key: 'aprovado', label: 'Aprovado (sim / não / descarte)' },
-  { key: 'tipoManutencao', label: 'Tipo de manutenção (preventiva / corretiva / preditiva / preventiva_corretiva)' },
+  { key: 'tipoManutencao', label: 'Tipo de manutenção (preventiva / corretiva / preventiva_corretiva / montagem_instalacao)' },
   { key: 'tipoAtendimento', label: 'Tipo de atendimento (interno / externo)' },
   { key: 'tecnico', label: 'Técnico responsável' },
   { key: 'observacoesGerais', label: 'Solicitação do cliente / relato' },
   { key: 'descricaoServico', label: 'Descrição do serviço realizado' },
+  { key: 'observacaoCliente', label: 'Observação do cliente (resposta após orçamento)' },
   { key: 'valorServico', label: 'Valor de mão de obra' },
   { key: 'deslocamento', label: 'Frete / deslocamento' },
   { key: 'desconto', label: 'Desconto' },
   { key: 'formaPagamento', label: 'Forma de pagamento' },
+  { key: 'numeroNf', label: 'Nº da NF' },
   { key: 'acessorios', label: 'Acessórios' },
   ...Array.from({ length: 10 }, (_, i) => i + 1).flatMap((n) => [
     { key: `peca${n}Nome`, label: `Peça ${n} (nome)` },
     { key: `peca${n}Valor`, label: `Peça ${n} (valor)` },
   ]),
-  { key: 'observacoesGerais', label: 'Observações' },
 ];
 
 function normalizarTexto(s) {
@@ -621,10 +657,11 @@ function ImportadorPlanilha({ titulo, descricao, campos, campoObrigatorio, campo
         const cols = Object.keys(linhas[0]);
 
         const auto = {};
+        const colunasUsadas = new Set();
         campos.forEach((campo) => {
           const alvo = normalizarTexto(campo.label.split('(')[0]);
-          const achada = cols.find((c) => normalizarTexto(c) === normalizarTexto(campo.key) || normalizarTexto(c) === alvo || normalizarTexto(c).includes(normalizarTexto(campo.key)));
-          if (achada) auto[campo.key] = achada;
+          const achada = cols.find((c) => !colunasUsadas.has(c) && (normalizarTexto(c) === normalizarTexto(campo.key) || normalizarTexto(c) === alvo));
+          if (achada) { auto[campo.key] = achada; colunasUsadas.add(achada); }
         });
 
         setColunas(cols);
@@ -705,8 +742,10 @@ function ImportadorPlanilha({ titulo, descricao, campos, campoObrigatorio, campo
       {etapa === 'mapear' && (
         <div className="form-card">
           <p className="muted small" style={{ marginBottom: 12 }}>
-            <strong>{nomeArquivo}</strong> — {linhasBrutas.length} linha(s) detectada(s). Confirma o mapeamento abaixo
-            (campos em branco ficam vazios/com valor padrão na importação).
+            <strong>{nomeArquivo}</strong> — {linhasBrutas.length} linha(s) detectada(s). O mapeamento abaixo é só uma
+            <strong> sugestão automática</strong> — confira cada campo com atenção antes de importar, principalmente os
+            que têm nome parecido (ex: "Número da OS" vs. "Número de série"). Campos em branco ficam vazios/com valor
+            padrão na importação.
           </p>
 
           <div className="form-grid">
@@ -731,12 +770,12 @@ function ImportadorPlanilha({ titulo, descricao, campos, campoObrigatorio, campo
 
           {!mapeamentoValido && <p className="login-erro" style={{ marginTop: 10 }}>Mapeia o campo obrigatório (*) pra continuar.</p>}
 
-          <h4 className="subsection-title" style={{ marginTop: 18 }}>Prévia (3 primeiras linhas)</h4>
+          <h4 className="subsection-title" style={{ marginTop: 18 }}>Prévia (8 primeiras linhas)</h4>
           <div className="table-scroll">
             <table className="data-table">
               <thead><tr>{campos.filter((c) => mapeamento[c.key]).map((c) => <th key={c.key}>{c.label}</th>)}</tr></thead>
               <tbody>
-                {linhasBrutas.slice(0, 3).map((row, i) => (
+                {linhasBrutas.slice(0, 8).map((row, i) => (
                   <tr key={i}>
                     {campos.filter((c) => mapeamento[c.key]).map((c) => (
                       <td key={c.key}>{formatarValor(c.key, row[mapeamento[c.key]])}</td>
@@ -1317,10 +1356,15 @@ function TemplateItemList({ items, onChange }) {
   );
 }
 
-function TipoEquipamentoForm({ initial, onSave, onCancel }) {
+function TipoEquipamentoForm({ initial, origemClone, onSave, onCancel }) {
   const [f, setF] = useState(initial || { nome: '', checklistEntradaPadrao: [], checklistPrePadrao: [], checklistPosPadrao: [], intervaloPreventivoMeses: '' });
   return (
     <div className="form-card">
+      {origemClone && (
+        <p className="muted small" style={{ marginBottom: 10 }}>
+          Clonado de <strong>{origemClone}</strong> — os checklists abaixo vieram desse tipo, edite à vontade antes de salvar.
+        </p>
+      )}
       <div className="form-grid">
         <label className="span-2">Nome do tipo
           <input value={f.nome} onChange={(e) => setF({ ...f, nome: e.target.value })} autoFocus placeholder="ex: Autoclave horizontal de bancada" />
@@ -1346,19 +1390,39 @@ function TipoEquipamentoForm({ initial, onSave, onCancel }) {
 function TiposEquipamentoView({ db, onAdd, onEdit, onDelete }) {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [cloneFrom, setCloneFrom] = useState(null);
+  const [cloneOrigemNome, setCloneOrigemNome] = useState('');
+
+  function iniciarNovo() { setEditing(null); setCloneFrom(null); setShowForm(true); }
+  function iniciarEdicao(t) { setEditing(t); setCloneFrom(null); setShowForm(true); }
+  function iniciarClone(t) {
+    setEditing(null);
+    setCloneFrom({
+      nome: '',
+      intervaloPreventivoMeses: t.intervaloPreventivoMeses,
+      checklistEntradaPadrao: [...t.checklistEntradaPadrao],
+      checklistPrePadrao: [...t.checklistPrePadrao],
+      checklistPosPadrao: [...t.checklistPosPadrao],
+    });
+    setCloneOrigemNome(t.nome);
+    setShowForm(true);
+  }
+  function fechar() { setShowForm(false); setEditing(null); setCloneFrom(null); setCloneOrigemNome(''); }
+
   return (
     <div>
       <div className="view-header">
         <h2>Tipos de equipamento</h2>
-        <button className="btn primary" onClick={() => { setEditing(null); setShowForm(true); }}><Plus size={15} /> Novo tipo</button>
+        <button className="btn primary" onClick={iniciarNovo}><Plus size={15} /> Novo tipo</button>
       </div>
       <p className="muted small" style={{ marginBottom: 14 }}>Cada tipo tem seu próprio checklist — assim um compressor nunca mostra item de autoclave.</p>
 
       {showForm && (
         <TipoEquipamentoForm
-          initial={editing}
-          onCancel={() => { setShowForm(false); setEditing(null); }}
-          onSave={(data) => { editing ? onEdit(editing.id, data) : onAdd(data); setShowForm(false); setEditing(null); }}
+          initial={editing || cloneFrom}
+          origemClone={cloneFrom ? cloneOrigemNome : null}
+          onCancel={fechar}
+          onSave={(data) => { editing ? onEdit(editing.id, data) : onAdd(data); fechar(); }}
         />
       )}
 
@@ -1378,7 +1442,8 @@ function TiposEquipamentoView({ db, onAdd, onEdit, onDelete }) {
                   <td>{t.checklistPosPadrao.length}</td>
                   <td>{db.equipamentos.filter((e) => e.tipoEquipamentoId === t.id).length}</td>
                   <td className="row-actions">
-                    <button className="link-btn" onClick={() => { setEditing(t); setShowForm(true); }}>Editar</button>
+                    <button className="link-btn" onClick={() => iniciarEdicao(t)}>Editar</button>
+                    <button className="link-btn" onClick={() => iniciarClone(t)}>Clonar</button>
                     <button className="link-btn danger" onClick={() => onDelete(t.id)}>Excluir</button>
                   </td>
                 </tr>
@@ -1543,8 +1608,8 @@ function OsForm({ clientes, equipamentos, tiposEquipamento, tecnicos, onCreateCl
           <select value={tipoManutencao} onChange={(e) => setTipoManutencao(e.target.value)}>
             <option value="preventiva">Preventiva</option>
             <option value="corretiva">Corretiva</option>
-            <option value="preditiva">Preditiva</option>
             <option value="preventiva_corretiva">Preventiva e Corretiva</option>
+            <option value="montagem_instalacao">Montagem/Instalação</option>
           </select>
         </label>
         <label>Técnico responsável
@@ -1594,11 +1659,16 @@ function OsForm({ clientes, equipamentos, tiposEquipamento, tecnicos, onCreateCl
 /* ---------- views ---------- */
 function Dashboard({ db, onOpenOs, onGoNovaOs, onMarcarContatado }) {
   const ordens = db.ordens;
-  const abertas = ordens.filter((o) => !['entregue', 'reprovado'].includes(o.status));
+  const abertas = ordens.filter((o) => !['concluido', 'entregue'].includes(o.status));
   const decisao = ordens.filter((o) => ['em_orcamento', 'aguardando_aprovacao'].includes(o.status));
-  const execucao = ordens.filter((o) => ['aprovado', 'em_execucao'].includes(o.status));
+  const execucao = ordens.filter((o) => o.status === 'em_execucao');
   const entregues = ordens.filter((o) => o.status === 'entregue');
-  const pendentes = [...abertas].sort((a, b) => a.dataEntrada.localeCompare(b.dataEntrada)).slice(0, 8);
+  const [filtroPendencia, setFiltroPendencia] = useState('todas');
+  const comPendencia = ordens
+    .map((o) => ({ os: o, pendencias: getPendenciasOs(o) }))
+    .filter((item) => item.pendencias.length > 0)
+    .filter((item) => filtroPendencia === 'todas' || item.pendencias.includes(filtroPendencia))
+    .sort((a, b) => a.os.dataEntrada.localeCompare(b.os.dataEntrada));
   const revisoes = getRevisoesPendentes(db);
   const custodia = getOsEmCustodia(db);
   const [printSeq, setPrintSeq] = useState(0);
@@ -1684,27 +1754,45 @@ function Dashboard({ db, onOpenOs, onGoNovaOs, onMarcarContatado }) {
           </>
         )}
 
-        <h3 className="section-title">Precisam de atenção</h3>
-        <table className="data-table">
-          <thead><tr><th>OS</th><th>Cliente</th><th>Equipamento</th><th>Tipo</th><th>Status</th><th>Entrada</th></tr></thead>
-          <tbody>
-            {pendentes.map((os) => {
-              const eq = db.equipamentos.find((e) => e.id === os.equipamentoId);
-              const cli = db.clientes.find((c) => c.id === os.clienteId);
-              const meta = STATUS_META[os.status];
-              return (
-                <tr key={os.id} className="clickable" onClick={() => onOpenOs(os.id)}>
-                  <td><OsTag numero={os.numero} /></td>
-                  <td>{cli?.nome || '—'}</td>
-                  <td>{eq ? tipoNomeFor(db.tiposEquipamento, eq) : '—'}</td>
-                  <td>{TIPO_LABEL[os.tipoManutencao]}</td>
-                  <td><Badge tone={meta.tone}>{meta.label}</Badge></td>
-                  <td>{fmtDate(os.dataEntrada)}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+        <div className="view-header" style={{ marginTop: 4 }}>
+          <h3 className="section-title" style={{ marginBottom: 0 }}>Precisam de atenção ({comPendencia.length})</h3>
+          <select className="meta-select" value={filtroPendencia} onChange={(e) => setFiltroPendencia(e.target.value)}>
+            <option value="todas">Todas as pendências</option>
+            <option value="tecnico">Técnico</option>
+            <option value="aprovacao">Aprovação</option>
+            <option value="pagamento">Pagamento</option>
+            <option value="retirada">Retirada</option>
+          </select>
+        </div>
+        <div className="table-scroll">
+          <table className="data-table">
+            <thead><tr><th>OS</th><th>Cliente</th><th>Equipamento</th><th>Tipo</th><th>Status</th><th>Entrada</th><th>Pendências</th></tr></thead>
+            <tbody>
+              {comPendencia.length === 0 ? (
+                <tr><td colSpan={7} className="muted small" style={{ padding: '14px 4px' }}>Nenhuma OS com pendência no momento.</td></tr>
+              ) : comPendencia.map(({ os, pendencias }) => {
+                const eq = db.equipamentos.find((e) => e.id === os.equipamentoId);
+                const cli = db.clientes.find((c) => c.id === os.clienteId);
+                const meta = STATUS_META[os.status] || STATUS_META.concluido;
+                return (
+                  <tr key={os.id} className="clickable" onClick={() => onOpenOs(os.id)}>
+                    <td><OsTag numero={os.numero} /></td>
+                    <td>{cli?.nome || '—'}</td>
+                    <td>{eq ? tipoNomeFor(db.tiposEquipamento, eq) : '—'}</td>
+                    <td>{TIPO_LABEL[os.tipoManutencao]}</td>
+                    <td><Badge tone={meta.tone}>{meta.label}</Badge></td>
+                    <td>{fmtDate(os.dataEntrada)}</td>
+                    <td>
+                      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                        {pendencias.map((p) => <Badge key={p} tone="amber">{PENDENCIA_LABEL[p]}</Badge>)}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       {printSeq > 0 && <PrintableRelatorioPendencias db={db} />}
@@ -1887,7 +1975,7 @@ function OrdensView({ db, onCreate, onOpen, forceOpenForm, onConsumedForceOpen, 
             {lista.map((os) => {
               const eq = db.equipamentos.find((e) => e.id === os.equipamentoId);
               const cli = db.clientes.find((c) => c.id === os.clienteId);
-              const meta = STATUS_META[os.status];
+              const meta = STATUS_META[os.status] || STATUS_META.concluido;
               return (
                 <tr key={os.id} className="clickable" onClick={() => onOpen(os.id)}>
                   <td><OsTag numero={os.numero} /></td>
@@ -1959,6 +2047,13 @@ function PrintableOs({ os, cliente, equipamento, empresa, tipoNome }) {
         <p>{orc.descricaoServico || '—'}</p>
       </section>
 
+      {orc.observacaoCliente && (
+        <section className="print-section">
+          <h2>Observação do cliente</h2>
+          <p>{orc.observacaoCliente}</p>
+        </section>
+      )}
+
       <section className="print-section">
         <h2>Peças utilizadas</h2>
         <table className="print-table">
@@ -1984,7 +2079,7 @@ function PrintableOs({ os, cliente, equipamento, empresa, tipoNome }) {
         </div>
       </section>
 
-      <p className="print-payment">Forma de pagamento: {orc.formaPagamento || '—'}</p>
+      <p className="print-payment">Forma de pagamento: {orc.formaPagamento || '—'}{orc.numeroNf ? ` — NF nº ${orc.numeroNf}` : ''}</p>
 
       <section className="print-section">
         <h2>Observações</h2>
@@ -2066,6 +2161,13 @@ function PrintableOsExterno({ os, cliente, equipamento, empresa, tipoNome }) {
         <p>{orc.descricaoServico || '—'}</p>
       </section>
 
+      {orc.observacaoCliente && (
+        <section className="print-section">
+          <h2>Observação do cliente</h2>
+          <p>{orc.observacaoCliente}</p>
+        </section>
+      )}
+
       <section className="print-section">
         <h2>Peças utilizadas</h2>
         <table className="print-table">
@@ -2091,7 +2193,7 @@ function PrintableOsExterno({ os, cliente, equipamento, empresa, tipoNome }) {
         </div>
       </section>
 
-      <p className="print-payment">Forma de pagamento: {orc.formaPagamento || '—'}</p>
+      <p className="print-payment">Forma de pagamento: {orc.formaPagamento || '—'}{orc.numeroNf ? ` — NF nº ${orc.numeroNf}` : ''}</p>
 
       <section className="print-section">
         <h2>Observações</h2>
@@ -2325,7 +2427,7 @@ function OsDetailView({ os, cliente, equipamento, empresa, tiposEquipamento, tec
   }
 
   const isExterno = os.tipoAtendimento === 'externo';
-  const meta = STATUS_META[os.status];
+  const meta = STATUS_META[os.status] || STATUS_META.concluido;
   const subtotalPecas = orc.pecas.reduce((s, p) => s + (Number(p.preco) || 0), 0);
   const totalGeral = isExterno
     ? (Number(orc.valorServico) || 0) + subtotalPecas
@@ -2448,10 +2550,18 @@ function OsDetailView({ os, cliente, equipamento, empresa, tiposEquipamento, tec
                 {FORMAS_PAGAMENTO.map((f) => <option key={f} value={f}>{f}</option>)}
               </select>
             </label>
+            <label>Nº da NF
+              <input value={orc.numeroNf} onChange={(e) => setOrc({ ...orc, numeroNf: e.target.value })} onBlur={() => saveOrcamento()} />
+            </label>
             <label>Situação
               <select value={orc.aprovado} onChange={(e) => { const next = { ...orc, aprovado: e.target.value }; setOrc(next); saveOrcamento(next); }}>
                 {situacaoOpcoes.map(([val, label]) => <option key={val} value={val}>{label}</option>)}
               </select>
+            </label>
+            <label className="span-2">Observação do cliente
+              <input value={orc.observacaoCliente} placeholder="ex: cliente pediu para não trocar a resistência"
+                onChange={(e) => setOrc({ ...orc, observacaoCliente: e.target.value })} onBlur={() => saveOrcamento()} />
+              <span className="field-note">Aparece na OS impressa/link do cliente — resposta dele após ver o orçamento.</span>
             </label>
           </div>
 
@@ -3079,6 +3189,13 @@ export function PublicOsView({ token }) {
           <p>{s.descricaoServico || '—'}</p>
         </section>
 
+        {s.observacaoCliente && (
+          <section className="print-section">
+            <h2>Observação do cliente</h2>
+            <p>{s.observacaoCliente}</p>
+          </section>
+        )}
+
         <section className="print-section">
           <h2>Peças utilizadas</h2>
           <table className="print-table">
@@ -3105,7 +3222,7 @@ export function PublicOsView({ token }) {
           </div>
         </section>
 
-        <p className="print-payment">Forma de pagamento: {s.formaPagamento || '—'}</p>
+        <p className="print-payment">Forma de pagamento: {s.formaPagamento || '—'}{s.numeroNf ? ` — NF nº ${s.numeroNf}` : ''}</p>
 
         <section className="print-section">
           <h2>Observações</h2>

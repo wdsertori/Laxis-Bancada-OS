@@ -40,6 +40,7 @@ CREATE TABLE clientes (
   cep VARCHAR(9) DEFAULT '',
   rua VARCHAR(190) DEFAULT '',
   numero VARCHAR(20) DEFAULT '',
+  complemento VARCHAR(100) DEFAULT '', -- sala, loja, andar, etc.
   bairro VARCHAR(120) DEFAULT '',
   cidade VARCHAR(120) DEFAULT '',
   estado VARCHAR(2) DEFAULT '',
@@ -106,9 +107,9 @@ CREATE TABLE ordens (
   tipo_atendimento VARCHAR(20) NOT NULL DEFAULT 'interno', -- interno | externo
   data_entrada DATE NOT NULL,
   origem VARCHAR(20) DEFAULT 'cliente_trouxe', -- cliente_trouxe | retirada
-  tipo_manutencao VARCHAR(30) DEFAULT 'preventiva', -- preventiva | corretiva | preditiva | preventiva_corretiva
+  tipo_manutencao VARCHAR(30) DEFAULT 'preventiva', -- preventiva | corretiva | preventiva_corretiva | montagem_instalacao
   tecnico VARCHAR(150) DEFAULT '',
-  status VARCHAR(30) NOT NULL DEFAULT 'recebido',
+  status VARCHAR(30) NOT NULL DEFAULT 'recebido', -- recebido | em_orcamento | aguardando_aprovacao | em_execucao | concluido | entregue
   hora_inicio VARCHAR(10) DEFAULT '',
   hora_fim VARCHAR(10) DEFAULT '',
   observacoes_gerais TEXT,

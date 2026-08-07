@@ -26,7 +26,7 @@ if ($token === '') {
 $stmt = $pdo->prepare(
     'SELECT o.*,
         c.nome AS cliente_nome, c.telefone AS cliente_telefone, c.documento AS cliente_documento,
-        c.rua AS cliente_rua, c.numero AS cliente_numero, c.bairro AS cliente_bairro,
+        c.rua AS cliente_rua, c.numero AS cliente_numero, c.complemento AS cliente_complemento, c.bairro AS cliente_bairro,
         c.cidade AS cliente_cidade, c.estado AS cliente_estado, c.cep AS cliente_cep,
         e.marca AS equip_marca, e.modelo AS equip_modelo, e.numero_serie AS equip_numero_serie,
         e.tensao AS equip_tensao, e.data_fabricacao AS equip_data_fabricacao,
@@ -78,6 +78,7 @@ Response::ok([
         'telefone' => $row['cliente_telefone'],
         'documento' => $row['cliente_documento'],
         'endereco' => trim(implode(', ', array_filter([$row['cliente_rua'], $row['cliente_numero']])))
+            . ($row['cliente_complemento'] ? " - {$row['cliente_complemento']}" : '')
             . ($row['cliente_bairro'] ? " — {$row['cliente_bairro']}" : '')
             . ($row['cliente_cidade'] ? ", {$row['cliente_cidade']}" : '')
             . ($row['cliente_estado'] ? "/{$row['cliente_estado']}" : ''),
@@ -99,6 +100,8 @@ Response::ok([
         'deslocamento' => $orc['deslocamento'] ?? '',
         'desconto' => $orc['desconto'] ?? '',
         'formaPagamento' => $orc['formaPagamento'] ?? '',
+        'numeroNf' => $orc['numeroNf'] ?? '',
+        'observacaoCliente' => $orc['observacaoCliente'] ?? '',
         'aprovado' => $orc['aprovado'] ?? 'pendente',
         'subtotalPecas' => $subtotalPecas,
         'totalGeral' => $totalGeral,
